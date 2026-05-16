@@ -50,6 +50,9 @@ const SIMULATOR_MACHINES = ['EM1', 'EM2', 'EM3', 'EM4'];
  * This version uses a simple, predictable, deterministic cycle for demonstration purposes.
  */
 function runSimulator(triggerArg) {
+  markFlowHandlerStart_('runSimulator', {
+    triggerSource: triggerArg && triggerArg.triggerUid ? 'trigger' : 'manual'
+  });
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const properties = PropertiesService.getScriptProperties();
   const simulationContext = resolveSimulationContext_(triggerArg);
@@ -162,8 +165,12 @@ function runSimulator(triggerArg) {
 
   // Run anomaly detection engine if it's a live run
   if (!simulationContext.isHistorical) {
-      runAnomalyCheck();
-  }
+  runAnomalyCheck();
+  markFlowHandlerSuccess_('runSimulator', {
+    machinesProcessed: SIMULATOR_MACHINES.length,
+    timestamp: simulationContext.timestamp
+  });
+}
 }
 
 function updateMachineSummaryForSimulator(sheet, machine, timestamp, status, cycleTime, alarm, rejectCount) {
@@ -224,12 +231,15 @@ function resolveSimulationContext_(triggerArg) {
  */
 function startSimulator() {
   stopSimulator(false);
-  ScriptApp.newTrigger('runSimulator')
-      .timeBased()
-      .everyMinutes(1)
-      .create();
-  SpreadsheetApp.getActiveSpreadsheet().toast("Simulator started. Data will update every minute in a predictable cycle.", "Simulator Control", 5);
-}
+    ScriptApp.newTrigger('runSimulator')
+        .timeBased()
+        .everyMinutes(1)
+        .create();
+    markFlowSetupRun_('startSimulator', 'runSimulator', {
+      interval: 'every 1 minute'
+    });
+    SpreadsheetApp.getActiveSpreadsheet().toast("Simulator started. Data will update every minute in a predictable cycle.", "Simulator Control", 5);
+  }
 
 function stopSimulator(showToast = true) {
   const triggers = ScriptApp.getProjectTriggers();

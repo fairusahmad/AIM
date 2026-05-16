@@ -7,6 +7,7 @@ const MACHINES = ['EM1', 'EM2', 'EM3', 'EM4'];
  * This is intended to be called by a time-driven trigger.
  */
 function runAnomalyCheck() {
+  markFlowHandlerStart_('runAnomalyCheck');
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const anomalyLogSheet = ss.getSheetByName('AnomalyLog');
   
@@ -37,6 +38,9 @@ function runAnomalyCheck() {
   
   // Call sendAlerts() at the end
   sendAlerts();
+  markFlowHandlerSuccess_('runAnomalyCheck', {
+    anomalyCount: newAnomalies.length
+  });
 }
 
 // =================================================================
@@ -445,5 +449,8 @@ function setupAnomalyTrigger() {
       .timeBased()
       .everyMinutes(1)
       .create();
+  markFlowSetupRun_('setupAnomalyTrigger', 'runAnomalyCheck', {
+    interval: 'every 1 minute'
+  });
   Logger.log('Anomaly check trigger created to run every 1 minute.');
 }

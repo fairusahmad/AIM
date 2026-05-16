@@ -116,8 +116,9 @@ function buildAlertEmailHtml(machine, anomalies, headers, spreadsheetUrl) {
 }
 
 function sendDailyReport() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const machines = ['EM1', 'EM2', 'EM3', 'EM4'];
+      markFlowHandlerStart_('sendDailyReport');
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const machines = ['EM1', 'EM2', 'EM3', 'EM4'];
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStart = new Date(yesterday.setHours(0, 0, 0, 0));
@@ -161,18 +162,22 @@ function sendDailyReport() {
 
     const alertEmail1 = getConfigValue('Alert_Email_1');
     const alertEmail2 = getConfigValue('Alert_Email_2');
-    const recipients = [alertEmail1, alertEmail2].filter(e => e).join(',');
-    
-    if (!recipients) {
-        Logger.log('No daily report email recipients configured.');
-        return;
-    }
+      const recipients = [alertEmail1, alertEmail2].filter(e => e).join(',');
+      
+      if (!recipients) {
+          Logger.log('No daily report email recipients configured.');
+          markFlowHandlerError_('sendDailyReport', new Error('No daily report email recipients configured.'));
+          return;
+      }
 
     const subject = `[AIM Daily Report] - ${yesterday.toLocaleDateString()}`;
     const htmlBody = buildDailyReportHtml(summaryData, yesterday.toLocaleDateString(), ss.getUrl());
 
-    GmailApp.sendEmail(recipients, subject, '', { htmlBody });
-}
+      GmailApp.sendEmail(recipients, subject, '', { htmlBody });
+      markFlowHandlerSuccess_('sendDailyReport', {
+          recipients: recipients
+      });
+  }
 
 function buildDailyReportHtml(summaryData, dateStr, spreadsheetUrl) {
     let tableHeaders = '';
@@ -230,5 +235,8 @@ function setupDailyReportTrigger() {
       .atHour(reportHour)
       .everyDays(1)
       .create();
+  markFlowSetupRun_('setupDailyReportTrigger', 'sendDailyReport', {
+    schedule: 'daily at ' + reportHour + ':00'
+  });
   Logger.log(`Daily report trigger created to run every day at ${reportHour}:00.`);
 }

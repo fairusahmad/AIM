@@ -112,6 +112,37 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   }
 ];
 
+const AIM_TRIGGER_FLOW = [
+  {
+    setupFunction: 'startSimulator',
+    handler: 'runSimulator',
+    label: 'Live simulation updates',
+    required: false,
+    dependsOn: ['seedHistoricalData']
+  },
+  {
+    setupFunction: 'setupAnomalyTrigger',
+    handler: 'runAnomalyCheck',
+    label: 'Anomaly detection cycle',
+    required: true,
+    dependsOn: []
+  },
+  {
+    setupFunction: 'setupDailyReportTrigger',
+    handler: 'sendDailyReport',
+    label: 'Daily summary reporting',
+    required: true,
+    dependsOn: ['Alert_Email_1', 'Alert_Email_2']
+  },
+  {
+    setupFunction: 'setupCleanupTrigger',
+    handler: 'cleanOldData',
+    label: 'Retention cleanup',
+    required: true,
+    dependsOn: ['DataRetention_days']
+  }
+];
+
 /**
  * Audits the AIM Monitoring System workbook against the structure defined in GEMINI.md
  * and checks live machine health from the latest rows in the operational sheets.
@@ -186,30 +217,34 @@ function runAIMScriptHealthCheck() {
   });
   const triggerDetails = describeProjectTriggers_(triggers);
   const configSnapshot = buildScriptHealthConfigSnapshot_();
+  const flowSummary = buildTriggerFlowSummary_(triggerHandlers, configSnapshot);
 
   logHealthDebug_('SCRIPT', 'Starting script health audit.', {
     checkedAt: checkedAt.toISOString(),
     triggerHandlers: triggerHandlers,
     triggerDetails: triggerDetails,
-    configSnapshot: configSnapshot
+    configSnapshot: configSnapshot,
+    flowSummary: flowSummary
   });
 
   const results = AIM_SCRIPT_HEALTH_SPECS.map(function(spec) {
     return evaluateScriptHealthSpec_(ss, spec, triggerHandlers);
   });
 
-  writeScriptHealthReport_(ss, checkedAt, results);
-  logScriptHealthSummary_(results, triggerDetails, configSnapshot);
+  writeScriptHealthReport_(ss, checkedAt, results, flowSummary);
+  logScriptHealthSummary_(results, triggerDetails, configSnapshot, flowSummary);
   logHealthDebug_('SCRIPT', 'Script health audit completed.', {
     overallStatus: calculateScriptHealthOverallStatus_(results),
     scriptCount: results.length,
-    categoryCounts: buildScriptTypeCounts_(results)
+    categoryCounts: buildScriptTypeCounts_(results),
+    nextRecommendedSetup: flowSummary.nextRecommendedSetup
   });
 
   return {
     checkedAt: checkedAt,
     overallStatus: calculateScriptHealthOverallStatus_(results),
-    results: results
+    results: results,
+    flowSummary: flowSummary
   };
 }
 
@@ -871,7 +906,7 @@ function appendScriptSpecificChecks_(ss, spec, notes, setStatus) {
   }
 }
 
-function writeScriptHealthReport_(ss, checkedAt, results) {
+function writeScriptHealthReport_(ss, checkedAt, results, flowSummary) {
   const sheet = ss.getSheetByName('ScriptHealth') || ss.insertSheet('ScriptHealth');
   sheet.clearContents();
 
@@ -914,6 +949,43 @@ function writeScriptHealthReport_(ss, checkedAt, results) {
     });
     sheet.getRange(9, 1, rows.length, rows[0].length).setValues(rows);
   }
+
+  const flowHeaderRow = results.length > 0 ? 11 + results.length : 11;
+  sheet.getRange(flowHeaderRow, 1, 1, 9).setValues([[
+    'SetupFunction',
+    'Handler',
+    'Label',
+    'State',
+    'Installed',
+    'Required',
+    'LastSetupAt',
+    'LastSuccessAt',
+    'Notes'
+  ]]);
+
+  if (flowSummary.steps.length > 0) {
+    const flowRows = flowSummary.steps.map(function(step) {
+      return [
+        step.setupFunction,
+        step.handler,
+        step.label,
+        step.state,
+        step.installed ? 'Yes' : 'No',
+        step.required ? 'Yes' : 'No',
+        step.lastSetupAt || '',
+        step.lastSuccessAt || '',
+        step.notes
+      ];
+    });
+    sheet.getRange(flowHeaderRow + 1, 1, flowRows.length, flowRows[0].length).setValues(flowRows);
+  }
+
+  const summaryRow = flowHeaderRow + flowSummary.steps.length + 3;
+  sheet.getRange(summaryRow, 1, 3, 2).setValues([
+    ['FlowStatus', flowSummary.overallState],
+    ['NextRecommendedSetup', flowSummary.nextRecommendedSetup || 'None'],
+    ['MissingRequiredHandlers', flowSummary.missingRequiredHandlers.join(', ') || 'None']
+  ]);
 
   sheet.setFrozenRows(8);
   sheet.autoResizeColumns(1, 9);
@@ -968,7 +1040,7 @@ function buildScriptTypeCounts_(results) {
   return counts;
 }
 
-function logScriptHealthSummary_(results, triggerDetails, configSnapshot) {
+function logScriptHealthSummary_(results, triggerDetails, configSnapshot, flowSummary) {
   const overallStatus = calculateScriptHealthOverallStatus_(results);
   const healthyCount = results.filter(function(item) { return item.status === 'healthy'; }).length;
   const warningCount = results.filter(function(item) { return item.status === 'warning'; }).length;
@@ -988,8 +1060,153 @@ function logScriptHealthSummary_(results, triggerDetails, configSnapshot) {
     triggerDetails: triggerDetails,
     configSnapshot: configSnapshot,
     categoryCounts: categoryCounts,
-    failingScripts: failingScripts.length > 0 ? failingScripts : ['None']
+    failingScripts: failingScripts.length > 0 ? failingScripts : ['None'],
+    flowSummary: flowSummary
   });
+}
+
+function buildTriggerFlowSummary_(triggerHandlers, configSnapshot) {
+  const steps = AIM_TRIGGER_FLOW.map(function(step) {
+    const isInstalled = triggerHandlers.indexOf(step.handler) !== -1;
+    const executionState = getFlowExecutionState_(step);
+    const missingDeps = (step.dependsOn || []).filter(function(dep) {
+      if (dep.indexOf('Alert_Email_') === 0) {
+        return !getConfigValue(dep);
+      }
+      if (dep === 'DataRetention_days') {
+        return !(Number(getConfigValue(dep) || 0) > 0);
+      }
+      if (dep === 'seedHistoricalData') {
+        return !hasHistoricalSeedData_();
+      }
+      return false;
+    });
+
+    let state = 'ready';
+    let notes = 'Trigger handler is installed.';
+    if (!isInstalled) {
+      state = missingDeps.length > 0 ? 'blocked' : 'missing';
+      notes = missingDeps.length > 0
+        ? 'Missing dependencies: ' + missingDeps.join(', ')
+        : 'Run ' + step.setupFunction + '() to install this trigger.';
+    } else if (executionState.lastSuccessAt) {
+      state = 'running';
+      notes = 'Installed and has recorded successful execution.';
+    } else {
+      state = 'installed';
+      notes = 'Installed, but no successful execution has been recorded yet.';
+    }
+
+    if (executionState.lastError) {
+      notes += ' Last error: ' + executionState.lastError;
+    }
+
+    return {
+      setupFunction: step.setupFunction,
+      handler: step.handler,
+      label: step.label,
+      required: step.required,
+      installed: isInstalled,
+      state: state,
+      lastSetupAt: executionState.lastSetupAt,
+      lastAttemptAt: executionState.lastAttemptAt,
+      lastSuccessAt: executionState.lastSuccessAt,
+      lastError: executionState.lastError,
+      notes: notes
+    };
+  });
+
+  const missingRequiredSteps = steps.filter(function(step) {
+    return step.required && !step.installed;
+  });
+  const missingRequiredHandlers = missingRequiredSteps.map(function(step) {
+    return step.handler;
+  });
+  const nextRecommendedStep = steps.find(function(step) {
+    return !step.installed && step.state !== 'blocked';
+  });
+  const overallState = missingRequiredSteps.length > 0 ? 'action_required' : 'ready';
+
+  return {
+    overallState: overallState,
+    nextRecommendedSetup: nextRecommendedStep ? nextRecommendedStep.setupFunction + '()' : '',
+    missingRequiredHandlers: missingRequiredHandlers,
+    steps: steps
+  };
+}
+
+function getFlowExecutionState_(step) {
+  const properties = PropertiesService.getScriptProperties();
+  const setupState = readFlowStateRecord_(properties, step.setupFunction);
+  const handlerState = readFlowStateRecord_(properties, step.handler);
+
+  return {
+    lastSetupAt: setupState.lastSuccessAt || setupState.lastAttemptAt || '',
+    lastAttemptAt: handlerState.lastAttemptAt || '',
+    lastSuccessAt: handlerState.lastSuccessAt || '',
+    lastError: handlerState.lastError || setupState.lastError || ''
+  };
+}
+
+function readFlowStateRecord_(properties, name) {
+  const raw = properties.getProperty('AIM_FLOW_STATE_' + name);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return {
+      lastError: 'State parse failed for ' + name + ': ' + err.message
+    };
+  }
+}
+
+function recordFlowState_(name, status, details) {
+  const properties = PropertiesService.getScriptProperties();
+  const state = readFlowStateRecord_(properties, name);
+  const nowIso = new Date().toISOString();
+
+  state.name = name;
+  state.lastAttemptAt = nowIso;
+  state.lastStatus = status;
+  state.lastDetails = details || {};
+
+  if (status === 'success' || status === 'setup') {
+    state.lastSuccessAt = nowIso;
+    state.lastError = '';
+  } else if (status === 'error') {
+    state.lastError = details && details.error ? details.error : 'Unknown error';
+  }
+
+  properties.setProperty('AIM_FLOW_STATE_' + name, JSON.stringify(state));
+}
+
+function markFlowSetupRun_(setupFunction, handler, details) {
+  recordFlowState_(setupFunction, 'setup', {
+    handler: handler,
+    details: details || {}
+  });
+}
+
+function markFlowHandlerStart_(handler, details) {
+  recordFlowState_(handler, 'start', details || {});
+}
+
+function markFlowHandlerSuccess_(handler, details) {
+  recordFlowState_(handler, 'success', details || {});
+}
+
+function markFlowHandlerError_(handler, err) {
+  recordFlowState_(handler, 'error', {
+    error: err && err.message ? err.message : String(err)
+  });
+}
+
+function hasHistoricalSeedData_() {
+  const rawDataSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('RawData');
+  return !!(rawDataSheet && rawDataSheet.getLastRow() > 2);
 }
 
 function logHealthDebug_(scope, message, details) {

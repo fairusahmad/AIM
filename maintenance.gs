@@ -4,11 +4,13 @@
  * Deletes old data from RawData and SensorData sheets based on the retention period in Config.
  */
 function cleanOldData() {
+  markFlowHandlerStart_('cleanOldData');
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const retentionDays = getConfigValue('DataRetention_days');
   
   if (!retentionDays || retentionDays <= 0) {
     Logger.log('Data retention is not configured or is invalid. Skipping cleanup.');
+    markFlowHandlerError_('cleanOldData', new Error('Data retention is not configured or is invalid.'));
     return;
   }
 
@@ -52,6 +54,9 @@ function cleanOldData() {
   });
 
   Logger.log('Data cleanup process finished.');
+  markFlowHandlerSuccess_('cleanOldData', {
+    retentionDays: retentionDays
+  });
 }
 
 /**
@@ -72,6 +77,9 @@ function setupCleanupTrigger() {
       .onWeekDay(ScriptApp.WeekDay.SUNDAY)
       .atHour(0)
       .create();
-      
+  markFlowSetupRun_('setupCleanupTrigger', 'cleanOldData', {
+    schedule: 'weekly Sunday at 00:00'
+  });
+        
   Logger.log('Weekly data cleanup trigger created for every Sunday at midnight.');
 }
