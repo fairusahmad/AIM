@@ -242,19 +242,47 @@
             tableBody.innerHTML = `<tr><td class="empty-state">${escapeHtml(message)}</td></tr>`;
         };
 
-        async function fetchData(page) {
-            try {
-                const response = await fetch(`${WEB_APP_URL}?page=${page}`);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
-                if (page !== 'meta') setStatusBanner('');
-                return data;
-            } catch (error) {
-                console.error('Failed to fetch data:', error);
-                setStatusBanner(`Failed to load ${page} data from Apps Script backend: ${error.message}`, 'danger');
-                return null;
-            }
+        function fetchData(page) {
+            return new Promise((resolve) => {
+                const callbackName = `aimDashboardJsonp_${page}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+                const separator = WEB_APP_URL.includes('?') ? '&' : '?';
+                const script = document.createElement('script');
+                const cleanup = () => {
+                    delete window[callbackName];
+                    if (script.parentNode) script.parentNode.removeChild(script);
+                };
+
+                const timeoutId = window.setTimeout(() => {
+                    cleanup();
+                    console.error('JSONP request timed out:', page);
+                    setStatusBanner(`Failed to load ${page} data from Apps Script backend: request timed out`, 'danger');
+                    resolve(null);
+                }, 15000);
+
+                window[callbackName] = (data) => {
+                    window.clearTimeout(timeoutId);
+                    cleanup();
+                    if (data && data.error) {
+                        console.error('Apps Script returned an error:', data.error);
+                        setStatusBanner(`Failed to load ${page} data from Apps Script backend: ${data.error}`, 'danger');
+                        resolve(null);
+                        return;
+                    }
+                    if (page !== 'meta') setStatusBanner('');
+                    resolve(data);
+                };
+
+                script.onerror = () => {
+                    window.clearTimeout(timeoutId);
+                    cleanup();
+                    console.error('JSONP script failed to load:', page);
+                    setStatusBanner(`Failed to load ${page} data from Apps Script backend: script load error`, 'danger');
+                    resolve(null);
+                };
+
+                script.src = `${WEB_APP_URL}${separator}page=${encodeURIComponent(page)}&callback=${encodeURIComponent(callbackName)}`;
+                document.body.appendChild(script);
+            });
         }
 
         async function loadDashboardMeta() {
