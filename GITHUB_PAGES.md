@@ -20,17 +20,6 @@ Your site will be available at a URL like:
 
 The static dashboard reads data from your Apps Script web app:
 
-`https://script.google.com/macros/s/AKfycbw02u0lfRRc7m1F39yvhmeSadJGwbO0dqWkY_eS-IzrVQUrfQ6zvSBfAhiUC9MVZDZe/exec`
+`https://script.google.com/macros/s/AKfycbxs85QOtKUOL3LSL6QYwYN9Hqkopttya-7QvtMwt1no3mCoiXyVqolvJzQ0rBodFyWs/exec`
 
-If you redeploy Apps Script and get a new `/exec` URL, you have two options:
-
-1. Update `DEFAULT_WEB_APP_URL` in `index.html`
-2. Override it from the browser using:
-
-`?api=<your-new-encoded-exec-url>`
-
-Example:
-
-`https://<your-username>.github.io/<repo-name>/?api=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FNEW_DEPLOYMENT_ID%2Fexec`
-
-The override is saved in `localStorage` for later visits.
+If you redeploy Apps Script and get a new `/exec` URL later, update `WEB_APP_URL` in `index.html`, commit, and push again.

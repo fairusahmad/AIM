@@ -170,26 +170,13 @@
     </main>
 
     <script>
-        const DEFAULT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbw02u0lfRRc7m1F39yvhmeSadJGwbO0dqWkY_eS-IzrVQUrfQ6zvSBfAhiUC9MVZDZe/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxs85QOtKUOL3LSL6QYwYN9Hqkopttya-7QvtMwt1no3mCoiXyVqolvJzQ0rBodFyWs/exec';
         const REFRESH_INTERVAL = 30000;
-        const API_QUERY_KEY = 'api';
         let activePage = 'overview';
         let refreshIntervalId;
         let dashboardMeta = null;
 
         const chartInstances = {};
-
-        function resolveApiUrl() {
-            const params = new URLSearchParams(window.location.search);
-            const override = params.get(API_QUERY_KEY);
-            if (override) {
-                localStorage.setItem('aim_dashboard_api_url', override);
-                return override;
-            }
-            return localStorage.getItem('aim_dashboard_api_url') || DEFAULT_WEB_APP_URL;
-        }
-
-        const WEB_APP_URL = resolveApiUrl();
 
         const getStatusColor = (status) => {
             if (!status) return 'secondary';
