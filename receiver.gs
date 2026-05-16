@@ -9,6 +9,15 @@ function doPost(e) {
     const alarmLogSheet = ss.getSheetByName('AlarmLog');
     const machineSummarySheet = ss.getSheetByName('MachineSummary');
 
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          status: "error",
+          message: "doPost requires HTTP POST data. Run testDoPost() from the editor if you want to simulate a payload."
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     const postData = JSON.parse(e.postData.contents);
     const timestamp = postData.timestamp ? new Date(postData.timestamp) : new Date();
 
@@ -110,6 +119,31 @@ function doPost(e) {
     Logger.log('doPost Error: ' + err.stack);
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.message })).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+function testDoPost() {
+  const samplePayload = {
+    machine: "EM1",
+    status: "running",
+    cycle_time: 4.2,
+    alarm_code: "AL001",
+    alarm_message: "Pressure low",
+    reject_count: 2,
+    timestamp: new Date().toISOString(),
+    sensors: [
+      { sensor_id: "EM1_TEMP_01", value: 215.3 },
+      { sensor_id: "EM1_PRES_01", value: 4.2 },
+      { sensor_id: "EM1_CURR_01", value: 7.1 },
+      { sensor_id: "EM1_VIBR_01", value: 2.8 },
+      { sensor_id: "EM1_SPED_01", value: 101.5 }
+    ]
+  };
+
+  return doPost({
+    postData: {
+      contents: JSON.stringify(samplePayload)
+    }
+  });
 }
 
 // Also write a helper function getConfigValue(param) that reads a value from the Config tab by parameter name.

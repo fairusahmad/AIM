@@ -288,8 +288,13 @@ function buildFeatureVector(ss, machine, index, allSensorData, allRawData, allAl
     const machineSensors = sensorConfig.filter(r => r[1] === machine);
     
     const machineRawData = allRawData.filter(r => r[1] === machine).sort((a,b) => new Date(b[0]) - new Date(a[0]));
-    if (machineRawData.length <= index) return null;
-    const targetRawData = machineRawData[index];
+    if (machineRawData.length === 0) return null;
+
+    const rowIndex = index === 'latest' ? 0 : Number(index);
+    if (!Number.isFinite(rowIndex) || rowIndex < 0 || rowIndex >= machineRawData.length) return null;
+
+    const targetRawData = machineRawData[rowIndex];
+    if (!targetRawData || !targetRawData[0]) return null;
     const timestamp = new Date(targetRawData[0]);
 
     const findSensorValue = (sensorType) => {
@@ -314,10 +319,10 @@ function buildFeatureVector(ss, machine, index, allSensorData, allRawData, allAl
         Current: findSensorValue('Current'),
         Vibration: findSensorValue('Vibration'),
         Speed: findSensorValue('Speed'),
-        CycleTime: targetRawData[3],
+        CycleTime: Number(targetRawData[3] || 0),
         AlarmFrequency: alarmsInWindow.length,
         Downtime: downtimeInWindow.reduce((sum, r) => sum + (r[4] || 0), 0),
-        RejectRate: targetRawData[6]
+        RejectRate: Number(targetRawData[6] || 0)
     };
 }
 

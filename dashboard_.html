@@ -61,13 +61,27 @@
         .table-responsive {
             max-height: 400px;
         }
+        .app-shell {
+            min-height: 100vh;
+        }
+        .status-banner {
+            display: none;
+            margin-bottom: 1rem;
+        }
+        .status-banner.show {
+            display: block;
+        }
+        .empty-state {
+            color: #6c757d;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
 
-    <div class="sidebar">
+    <div class="sidebar app-shell">
         <h4><i class="bi bi-robot"></i> AIM Monitoring</h4>
-        <p class="text-muted small">Standalone Dashboard</p>
+        <p class="text-muted small" id="dashboard-subtitle">Apps Script Dashboard</p>
         <hr>
         <ul class="nav flex-column nav-pills" id="dashboard-tabs">
             <li class="nav-item"><a class="nav-link active" href="#overview" data-page="overview"><i class="bi bi-grid-1x2-fill"></i> Overview</a></li>
@@ -79,11 +93,12 @@
         </ul>
         <hr>
         <div class="bottom-links">
-             <a href="https://docs.google.com/spreadsheets/d/1RkvO_w75qAGwLZsjNnXKCvPsXWPLVpRuBLxGJheNRxw/edit" class="btn btn-outline-secondary btn-sm w-100 mb-2" target="_blank" rel="noopener noreferrer"><i class="bi bi-table"></i> View Google Sheet</a>
+             <a href="#" id="spreadsheet-link" class="btn btn-outline-secondary btn-sm w-100 mb-2 disabled" target="_blank" rel="noopener noreferrer" aria-disabled="true"><i class="bi bi-table"></i> View Google Sheet</a>
         </div>
     </div>
 
     <main class="main-content">
+        <div id="status-banner" class="alert alert-warning status-banner" role="alert"></div>
         <div class="tab-content">
             <!-- Overview Tab -->
             <div class="tab-pane active" id="overview">
@@ -170,6 +185,7 @@
         const REFRESH_INTERVAL = 30000; // 30 seconds
         let activePage = 'overview';
         let refreshIntervalId;
+        let dashboardMeta = null;
 
         const chartInstances = {};
 
@@ -213,6 +229,18 @@
             return Number.isFinite(numericValue) ? numericValue.toFixed(digits) : 'N/A';
         };
 
+        const setStatusBanner = (message = '', type = 'warning') => {
+            const banner = document.getElementById('status-banner');
+            banner.className = `alert alert-${type} status-banner`;
+            banner.textContent = message;
+            banner.classList.toggle('show', Boolean(message));
+        };
+
+        const renderEmptyState = (tableHead, tableBody, message) => {
+            tableHead.innerHTML = '';
+            tableBody.innerHTML = `<tr><td class="empty-state">${escapeHtml(message)}</td></tr>`;
+        };
+
         // --- DATA FETCHING ---
         async function fetchData(page) {
             try {
@@ -224,11 +252,28 @@
                 if (data.error) {
                     throw new Error(data.error);
                 }
+                if (page !== 'meta') setStatusBanner('');
                 return data;
             } catch (error) {
                 console.error('Failed to fetch data:', error);
-                // Display error to user?
+                setStatusBanner(`Failed to load ${page} data: ${error.message}`, 'danger');
                 return null;
+            }
+        }
+
+        async function loadDashboardMeta() {
+            const data = await fetchData('meta');
+            if (!data) return;
+
+            dashboardMeta = data;
+            document.title = `${data.spreadsheetName || 'AIM Monitoring'} Dashboard`;
+            document.getElementById('dashboard-subtitle').textContent = data.spreadsheetName || 'Apps Script Dashboard';
+
+            const spreadsheetLink = document.getElementById('spreadsheet-link');
+            if (data.spreadsheetUrl) {
+                spreadsheetLink.href = data.spreadsheetUrl;
+                spreadsheetLink.classList.remove('disabled');
+                spreadsheetLink.removeAttribute('aria-disabled');
             }
         }
 
@@ -239,6 +284,11 @@
             const summaryBody = document.getElementById('summary-table-body');
             
             cardsContainer.innerHTML = '';
+            if (!data || data.length === 0) {
+                renderEmptyState(summaryHead, summaryBody, 'No machine summary data available.');
+                return;
+            }
+
             data.forEach(machine => {
                 const color = getStatusColor(machine.Status);
                 const cardHtml = `
@@ -258,13 +308,11 @@
                 cardsContainer.innerHTML += cardHtml;
             });
 
-            if (data.length > 0) {
-                const headers = Object.keys(data[0]);
-                summaryHead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
-                summaryBody.innerHTML = data.map(row => 
-                    `<tr>${headers.map(h => `<td>${formatCellValue(h, row[h])}</td>`).join('')}</tr>`
-                ).join('');
-            }
+            const headers = Object.keys(data[0]);
+            summaryHead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+            summaryBody.innerHTML = data.map(row => 
+                `<tr>${headers.map(h => `<td>${formatCellValue(h, row[h])}</td>`).join('')}</tr>`
+            ).join('');
         }
 
         function renderGenericTable(tableId, data) {
@@ -280,7 +328,7 @@
                     `<tr>${headers.map(h => `<td>${formatCellValue(h, row[h])}</td>`).join('')}</tr>`
                 ).join('');
             } else {
-                tableHead.innerHTML = '';
+                renderEmptyState(tableHead, tableBody, 'No data available for this section.');
             }
         }
 
@@ -442,8 +490,7 @@
             const tabs = document.getElementById('dashboard-tabs');
             tabs.addEventListener('click', handleTabClick);
 
-            // Load initial page
-            loadPage(activePage);
+            loadDashboardMeta().then(() => loadPage(activePage));
 
             // Set up auto-refresh
             if(refreshIntervalId) clearInterval(refreshIntervalId);
