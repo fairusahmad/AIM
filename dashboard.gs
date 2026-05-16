@@ -5,9 +5,10 @@
  * @returns {HtmlOutput|ContentService.TextOutput} The appropriate response.
  */
 function doGet(e) {
-  if (e.parameter.page) {
+  const page = e && e.parameter ? e.parameter.page : '';
+  if (page) {
     // If a 'page' parameter is present, it's a data request from the dashboard.
-    return handleDataRequest(e.parameter.page);
+    return handleDataRequest(page);
   } else {
     // If no page is specified, serve the main dashboard HTML file.
     // This allows the dashboard to be hosted directly from Apps Script.

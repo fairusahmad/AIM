@@ -166,7 +166,7 @@
     </main>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwLe-zPsGuEVbu2jrXkYurrF2i6bUf_W2cXxcuThjF7v6TAe3u_g22D-nr3ni8koajr/exec';
+        const WEB_APP_URL = window.location.href.split('?')[0];
         const REFRESH_INTERVAL = 30000; // 30 seconds
         let activePage = 'overview';
         let refreshIntervalId;
@@ -190,6 +190,27 @@
             } catch (e) {
                 return dateString;
             }
+        };
+
+        const escapeHtml = (value) => String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const isDateColumn = (header) => /timestamp|updated|start|end|resolved/i.test(header);
+
+        const formatCellValue = (header, value) => {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            if (isDateColumn(header)) return formatDate(value);
+            if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
+            return escapeHtml(value);
+        };
+
+        const formatNumber = (value, digits = 2) => {
+            const numericValue = Number(value);
+            return Number.isFinite(numericValue) ? numericValue.toFixed(digits) : 'N/A';
         };
 
         // --- DATA FETCHING ---
@@ -226,7 +247,7 @@
                             <div class="card-body">
                                 <h5 class="card-title">${machine.Machine}</h5>
                                 <p class="card-text mb-1"><strong>Status:</strong> <span class="badge bg-${color}">${machine.Status || 'N/A'}</span></p>
-                                <p class="card-text mb-0"><strong>Cycle Time:</strong> ${machine.CycleTime_sec ? machine.CycleTime_sec.toFixed(2) : 'N/A'}s</p>
+                                <p class="card-text mb-0"><strong>Cycle Time:</strong> ${formatNumber(machine.CycleTime_sec)}s</p>
                                 <p class="card-text mb-0"><strong>Anomalies:</strong> ${machine.ActiveAnomalyCount || 0}</p>
                             </div>
                             <div class="card-footer bg-transparent border-top-0 text-muted small">
@@ -241,7 +262,7 @@
                 const headers = Object.keys(data[0]);
                 summaryHead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
                 summaryBody.innerHTML = data.map(row => 
-                    `<tr>${headers.map(h => `<td>${formatDate(row[h])}</td>`).join('')}</tr>`
+                    `<tr>${headers.map(h => `<td>${formatCellValue(h, row[h])}</td>`).join('')}</tr>`
                 ).join('');
             }
         }
@@ -256,7 +277,7 @@
                 const headers = Object.keys(data[0]);
                 tableHead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
                 tableBody.innerHTML = data.map(row => 
-                    `<tr>${headers.map(h => `<td>${formatDate(row[h])}</td>`).join('')}</tr>`
+                    `<tr>${headers.map(h => `<td>${formatCellValue(h, row[h])}</td>`).join('')}</tr>`
                 ).join('');
             } else {
                 tableHead.innerHTML = '';

@@ -44,6 +44,8 @@ const AIM_EXPECTED_SENSOR_IDS = [
   'EM4_VISN_01', 'EM4_LASR_01', 'EM4_CURR_01', 'EM4_VIBR_01', 'EM4_SPED_01', 'EM4_MARK_01', 'EM4_REJT_01'
 ];
 
+const AIM_MAINTAINED_SHEETS = ['HealthCheck', 'Instructions'];
+
 /**
  * Audits the AIM Monitoring System workbook against the structure defined in GEMINI.md
  * and checks live machine health from the latest rows in the operational sheets.
@@ -53,6 +55,8 @@ function runAIMHealthCheck() {
   const issues = [];
   const machineStatuses = [];
   const now = new Date();
+
+  syncProjectInstructionsSheet_(ss, now);
 
   validateWorkbookStructure_(ss, issues);
   validateConfig_(ss, issues);
@@ -106,7 +110,7 @@ function validateWorkbookStructure_(ss, issues) {
   });
 
   actualSheetNames.forEach(function(sheetName) {
-    if (!AIM_REQUIRED_SHEETS[sheetName] && sheetName !== 'HealthCheck') {
+    if (!AIM_REQUIRED_SHEETS[sheetName] && AIM_MAINTAINED_SHEETS.indexOf(sheetName) === -1) {
       issues.push(makeIssue_('warning', 'Workbook', sheetName, 'UnexpectedSheet', 'Extra sheet found; review whether it is still needed.'));
     }
   });
@@ -131,6 +135,20 @@ function validateConfig_(ss, issues) {
       issues.push(makeIssue_('critical', 'Config', param, 'MissingConfig', 'Required configuration parameter is missing or empty.'));
     }
   });
+
+  const missingParams = AIM_REQUIRED_CONFIG_PARAMS.filter(function(param) {
+    return configMap[param] === '' || configMap[param] === null || configMap[param] === undefined;
+  });
+
+  if (missingParams.length > 0) {
+    issues.push(makeIssue_(
+      'warning',
+      'Config',
+      'Summary',
+      'MissingConfigSummary',
+      'Missing config parameters: ' + missingParams.join(', ')
+    ));
+  }
 }
 
 function validateMachineSummarySetup_(ss, issues) {
@@ -181,6 +199,7 @@ function evaluateMachineHealth_(ss, issues, now) {
   const sensorRows = getRowsAsObjects_(ss.getSheetByName('SensorData'));
   const anomalyRows = getRowsAsObjects_(ss.getSheetByName('AnomalyLog'));
   const noSignalTimeoutMin = Number(getConfigValue('NoSignal_Timeout_min') || 5);
+  const staleDataHours = 24;
   const cycleWarn = Number(getConfigValue('CycleTime_Warning_sec') || 5.5);
   const cycleCritical = Number(getConfigValue('CycleTime_Critical_sec') || 7.0);
   const activeWindowStart = new Date(now.getTime() - 10 * 60 * 1000);
@@ -202,7 +221,11 @@ function evaluateMachineHealth_(ss, issues, now) {
       issues.push(makeIssue_('critical', machine, 'MachineSummary', 'NoSummaryData', 'No LastUpdated value found for machine.'));
     } else {
       const ageMin = minutesBetween_(now, asDate_(summary.LastUpdated));
-      if (ageMin > noSignalTimeoutMin) {
+      if (ageMin > staleDataHours * 60) {
+        severity = maxSeverity_(severity, 'stale');
+        reasons.push('Data is stale.');
+        issues.push(makeIssue_('warning', machine, 'MachineSummary', 'StaleData', 'LastUpdated is more than 24 hours old.'));
+      } else if (ageMin > noSignalTimeoutMin) {
         severity = 'critical';
         reasons.push('No recent signal.');
         issues.push(makeIssue_('critical', machine, 'MachineSummary', 'NoSignal', 'LastUpdated exceeded NoSignal_Timeout_min.'));
@@ -278,6 +301,7 @@ function writeHealthReport_(ss, overallStatus, issues, machineStatuses, checkedA
     ['IssueCount', issues.length],
     ['HealthyMachines', machineStatuses.filter(function(item) { return item.status === 'healthy'; }).length],
     ['WarningMachines', machineStatuses.filter(function(item) { return item.status === 'warning'; }).length],
+    ['StaleMachines', machineStatuses.filter(function(item) { return item.status === 'stale'; }).length],
     ['CriticalMachines', machineStatuses.filter(function(item) { return item.status === 'critical'; }).length]
   ];
 
@@ -322,6 +346,62 @@ function writeHealthReport_(ss, overallStatus, issues, machineStatuses, checkedA
   }
 
   sheet.autoResizeColumns(1, 9);
+}
+
+function syncProjectInstructionsSheet_(ss, updatedAt) {
+  const sheet = ss.getSheetByName('Instructions') || ss.insertSheet('Instructions');
+  sheet.clearContents();
+
+  const summaryRows = [
+    ['AIM Monitoring System Instructions'],
+    ['LastUpdated', updatedAt],
+    ['Purpose', 'Maintained operating guide for all Google Apps Script files and workbook setup.'],
+    ['HowToUse', 'Read the steps from top to bottom. Re-run runAIMHealthCheck() whenever you want this sheet refreshed.']
+  ];
+
+  sheet.getRange(1, 1, summaryRows.length, 2).setValues(padInstructionSummaryRows_(summaryRows));
+
+  const headers = [['Step', 'Area', 'FileOrFunction', 'Action', 'Details', 'StatusHint']];
+  sheet.getRange(7, 1, 1, headers[0].length).setValues(headers);
+
+  const rows = buildInstructionRows_(ss);
+  if (rows.length > 0) {
+    sheet.getRange(8, 1, rows.length, rows[0].length).setValues(rows);
+  }
+
+  sheet.setFrozenRows(7);
+  sheet.autoResizeColumns(1, 6);
+}
+
+function buildInstructionRows_(ss) {
+  const hasAllCoreSheets = Object.keys(AIM_REQUIRED_SHEETS).every(function(name) {
+    return !!ss.getSheetByName(name);
+  });
+  const hasConfig = !!ss.getSheetByName('Config');
+  const configStatus = hasConfig ? 'Check Config tab values before running triggers.' : 'Config tab missing.';
+  const simulatorStatus = ss.getSheetByName('RawData') && ss.getSheetByName('RawData').getLastRow() > 1
+    ? 'Historical or live data already exists.'
+    : 'No machine data found yet.';
+
+  return [
+    ['1', 'Workbook', 'GEMINI.md / spreadsheet tabs', 'Verify workbook structure', 'Make sure RawData, SensorData, SensorConfig, AlarmLog, DowntimeLog, AnomalyLog, MachineSummary, and Config exist with the expected headers.', hasAllCoreSheets ? 'Core sheets present.' : 'Some required sheets are missing.'],
+    ['2', 'Receiver', 'receiver.gs / doPost(e)', 'Receive machine payloads', 'Deploy the Apps Script project as a Web App. External PLC or gateway payloads should POST machine data into RawData, SensorData, AlarmLog, and MachineSummary.', 'Use when real machine data or external simulator is available.'],
+    ['3', 'Anomaly Engine', 'anomaly.gs / runAnomalyCheck()', 'Run rule-based and AI-style anomaly detection', 'This checks warning and critical sensors, cycle time, repeated alarms, no-signal conditions, and the modified isolation-forest-inspired score.', 'Set up the 1-minute trigger with setupAnomalyTrigger().'],
+    ['4', 'Alerts', 'alerts.gs / sendAlerts()', 'Send anomaly emails', 'Unsent anomalies in AnomalyLog are grouped by machine and emailed to recipients from Config.', configStatus],
+    ['5', 'Daily Report', 'alerts.gs / sendDailyReport()', 'Send daily summary email', 'Builds the prior-day summary using DowntimeLog, AlarmLog, AnomalyLog, RawData, and MachineSummary.', 'Set up the daily trigger with setupDailyReportTrigger().'],
+    ['6', 'Cleanup', 'maintenance.gs / cleanOldData()', 'Clean old operational data', 'Deletes old rows only from RawData and SensorData based on DataRetention_days, while keeping alarm, downtime, and anomaly history.', 'Set up the weekly trigger with setupCleanupTrigger().'],
+    ['7', 'Simulator', 'simulator.gs / seedHistoricalData()', 'Seed history for dashboard charts', 'Run once to create 7 days of sample history before starting the live simulator.', simulatorStatus],
+    ['8', 'Simulator', 'simulator.gs / startSimulator()', 'Start live demo data', 'Creates a 1-minute trigger that simulates EM1 to EM4 activity and then runs the anomaly engine.', 'Stop it with stopSimulator() when you no longer need demo data.'],
+    ['9', 'Dashboard', 'dashboard.gs / doGet(e)', 'Serve dashboard page and data API', 'Hosts dashboard_.html and returns JSON for overview, sensors, anomalies, downtime, alarms, and cycle time.', 'Deploy as Web App if you want browser access.'],
+    ['10', 'Health Audit', 'health.gs / runAIMHealthCheck()', 'Refresh health and instruction sheets', 'Validates workbook structure, config completeness, machine freshness, and current machine condition. It also refreshes this Instructions sheet.', 'Run anytime after major changes or before presentations.'],
+    ['11', 'Recommended Order', 'Manual run order', 'Use the project end-to-end', 'Suggested sequence: verify workbook, fill Config, deploy Web App, run setupAnomalyTrigger, setupDailyReportTrigger, setupCleanupTrigger, seedHistoricalData, startSimulator, then run runAIMHealthCheck.', 'This is the fastest full prototype setup path.']
+  ];
+}
+
+function padInstructionSummaryRows_(rows) {
+  return rows.map(function(row) {
+    return row.length === 1 ? [row[0], ''] : row;
+  });
 }
 
 function getSheetHeaders_(sheet) {
@@ -388,6 +468,9 @@ function calculateOverallHealth_(issues, machineStatuses) {
   if (machineStatuses.some(function(item) { return item.status === 'critical'; })) {
     return 'critical';
   }
+  if (machineStatuses.some(function(item) { return item.status === 'stale'; })) {
+    return 'stale';
+  }
   if (issues.some(function(issue) { return issue.severity === 'warning'; })) {
     return 'warning';
   }
@@ -428,6 +511,6 @@ function minutesBetween_(later, earlier) {
 }
 
 function maxSeverity_(current, next) {
-  const rank = { healthy: 0, warning: 1, critical: 2 };
+  const rank = { healthy: 0, stale: 1, warning: 2, critical: 3 };
   return rank[next] > rank[current] ? next : current;
 }
