@@ -50,6 +50,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'receiver.gs',
     label: 'Receiver API',
+    category: 'api',
     functions: ['doPost', 'testDoPost', 'getConfigValue'],
     requiredSheets: ['RawData', 'SensorData', 'SensorConfig', 'AlarmLog', 'MachineSummary'],
     triggerHandlers: [],
@@ -58,6 +59,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'simulator.gs',
     label: 'Simulator',
+    category: 'simulation',
     functions: ['runSimulator', 'seedHistoricalData', 'startSimulator', 'stopSimulator', 'resetSimulatorState'],
     requiredSheets: ['RawData', 'SensorData', 'AlarmLog', 'DowntimeLog', 'MachineSummary', 'SensorConfig'],
     triggerHandlers: ['runSimulator'],
@@ -66,6 +68,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'anomaly.gs',
     label: 'Anomaly Engine',
+    category: 'analytics',
     functions: ['runAnomalyCheck', 'buildFeatureVector', 'calculateRiskScore', 'preventDuplicates', 'updateMachineSummary', 'getSensorConfig', 'setupAnomalyTrigger'],
     requiredSheets: ['AnomalyLog', 'SensorData', 'RawData', 'AlarmLog', 'DowntimeLog', 'MachineSummary', 'SensorConfig'],
     triggerHandlers: ['runAnomalyCheck'],
@@ -74,6 +77,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'alerts.gs',
     label: 'Alerts and Reporting',
+    category: 'notification',
     functions: ['sendAlerts', 'buildAlertEmailHtml', 'sendDailyReport', 'buildDailyReportHtml', 'setupDailyReportTrigger'],
     requiredSheets: ['AnomalyLog', 'DowntimeLog', 'AlarmLog', 'RawData', 'MachineSummary'],
     triggerHandlers: ['sendDailyReport'],
@@ -82,6 +86,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'maintenance.gs',
     label: 'Retention Cleanup',
+    category: 'maintenance',
     functions: ['cleanOldData', 'setupCleanupTrigger'],
     requiredSheets: ['RawData', 'SensorData'],
     triggerHandlers: ['cleanOldData'],
@@ -90,6 +95,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'dashboard.gs',
     label: 'Dashboard Web App',
+    category: 'dashboard',
     functions: ['doGet', 'handleDataRequest', 'getSheetDataAsJson_', 'getDashboardMeta_', 'getAIMSpreadsheet_'],
     requiredSheets: ['MachineSummary', 'SensorData', 'AnomalyLog', 'DowntimeLog', 'AlarmLog', 'RawData'],
     triggerHandlers: [],
@@ -98,6 +104,7 @@ const AIM_SCRIPT_HEALTH_SPECS = [
   {
     file: 'health.gs',
     label: 'Health Audit',
+    category: 'health',
     functions: ['runAIMHealthCheck', 'runAIMScriptHealthCheck', 'runFullAIMHealthAudit'],
     requiredSheets: [],
     triggerHandlers: [],
@@ -173,13 +180,18 @@ function runAIMHealthCheck() {
 function runAIMScriptHealthCheck() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const checkedAt = new Date();
-  const triggerHandlers = ScriptApp.getProjectTriggers().map(function(trigger) {
+  const triggers = ScriptApp.getProjectTriggers();
+  const triggerHandlers = triggers.map(function(trigger) {
     return trigger.getHandlerFunction();
   });
+  const triggerDetails = describeProjectTriggers_(triggers);
+  const configSnapshot = buildScriptHealthConfigSnapshot_();
 
   logHealthDebug_('SCRIPT', 'Starting script health audit.', {
     checkedAt: checkedAt.toISOString(),
-    triggerHandlers: triggerHandlers
+    triggerHandlers: triggerHandlers,
+    triggerDetails: triggerDetails,
+    configSnapshot: configSnapshot
   });
 
   const results = AIM_SCRIPT_HEALTH_SPECS.map(function(spec) {
@@ -187,9 +199,11 @@ function runAIMScriptHealthCheck() {
   });
 
   writeScriptHealthReport_(ss, checkedAt, results);
+  logScriptHealthSummary_(results, triggerDetails, configSnapshot);
   logHealthDebug_('SCRIPT', 'Script health audit completed.', {
     overallStatus: calculateScriptHealthOverallStatus_(results),
-    scriptCount: results.length
+    scriptCount: results.length,
+    categoryCounts: buildScriptTypeCounts_(results)
   });
 
   return {
@@ -683,7 +697,8 @@ function maxSeverity_(current, next) {
 function evaluateScriptHealthSpec_(ss, spec, triggerHandlers) {
   logHealthDebug_('SCRIPT', 'Evaluating script health spec.', {
     file: spec.file,
-    label: spec.label
+    label: spec.label,
+    category: spec.category
   });
   const missingFunctions = spec.functions.filter(function(name) {
     return typeof globalThis[name] !== 'function';
@@ -760,6 +775,7 @@ function evaluateScriptHealthSpec_(ss, spec, triggerHandlers) {
   return {
     file: spec.file,
     label: spec.label,
+    category: spec.category,
     status: status,
     functionCount: spec.functions.length,
     missingFunctions: missingFunctions,
@@ -911,6 +927,69 @@ function calculateScriptHealthOverallStatus_(results) {
     return 'warning';
   }
   return 'healthy';
+}
+
+function describeProjectTriggers_(triggers) {
+  return triggers.map(function(trigger) {
+    return {
+      handler: trigger.getHandlerFunction(),
+      eventType: String(trigger.getEventType()),
+      source: String(trigger.getTriggerSource()),
+      uniqueId: trigger.getUniqueId ? trigger.getUniqueId() : ''
+    };
+  });
+}
+
+function buildScriptHealthConfigSnapshot_() {
+  return {
+    DailyReport_Hour: getConfigValue('DailyReport_Hour'),
+    DataRetention_days: getConfigValue('DataRetention_days'),
+    NoSignal_Timeout_min: getConfigValue('NoSignal_Timeout_min'),
+    IForest_WindowSize: getConfigValue('IForest_WindowSize'),
+    Alert_Email_1_Configured: !!getConfigValue('Alert_Email_1'),
+    Alert_Email_2_Configured: !!getConfigValue('Alert_Email_2')
+  };
+}
+
+function buildScriptTypeCounts_(results) {
+  const counts = {};
+  results.forEach(function(result) {
+    if (!counts[result.category]) {
+      counts[result.category] = {
+        total: 0,
+        healthy: 0,
+        warning: 0,
+        critical: 0
+      };
+    }
+    counts[result.category].total++;
+    counts[result.category][result.status]++;
+  });
+  return counts;
+}
+
+function logScriptHealthSummary_(results, triggerDetails, configSnapshot) {
+  const overallStatus = calculateScriptHealthOverallStatus_(results);
+  const healthyCount = results.filter(function(item) { return item.status === 'healthy'; }).length;
+  const warningCount = results.filter(function(item) { return item.status === 'warning'; }).length;
+  const criticalCount = results.filter(function(item) { return item.status === 'critical'; }).length;
+  const categoryCounts = buildScriptTypeCounts_(results);
+  const failingScripts = results
+    .filter(function(item) { return item.status !== 'healthy'; })
+    .map(function(item) {
+      return item.file + ' [' + item.status + ']: ' + item.notes;
+    });
+
+  logHealthDebug_('SCRIPT_SUMMARY', 'Readable script health summary.', {
+    overallStatus: overallStatus,
+    healthyCount: healthyCount,
+    warningCount: warningCount,
+    criticalCount: criticalCount,
+    triggerDetails: triggerDetails,
+    configSnapshot: configSnapshot,
+    categoryCounts: categoryCounts,
+    failingScripts: failingScripts.length > 0 ? failingScripts : ['None']
+  });
 }
 
 function logHealthDebug_(scope, message, details) {
