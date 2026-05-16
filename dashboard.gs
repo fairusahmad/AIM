@@ -33,6 +33,9 @@ function handleDataRequest(page, callback) {
       case 'sensors':
         data = getSheetDataAsJson_('SensorData', 300);
         break;
+      case 'sensorconfig':
+        data = getSheetDataAsJson_('SensorConfig', 500, ['SensorID', 'Machine', 'SensorName', 'SensorType', 'Unit', 'WarnThreshold', 'CriticalThreshold', 'Direction', 'Active']);
+        break;
       case 'anomalies':
         data = getSheetDataAsJson_('AnomalyLog', 200);
         break;

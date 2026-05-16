@@ -111,11 +111,24 @@
 
             <div class="tab-pane" id="sensors">
                 <h3>Sensor Monitor</h3>
-                <div class="card">
+                <div class="card mb-3">
                     <div class="card-body">
-                        <canvas id="sensor-chart"></canvas>
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-6">
+                                <label for="sensor-machine-filter" class="form-label">Machine</label>
+                                <select id="sensor-machine-filter" class="form-select">
+                                    <option value="ALL">All Machines</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="text-muted small pt-md-4">
+                                    Separate chart cards are shown for each sensor, with warning and critical reference lines from SensorConfig.
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
+                <div id="sensor-machine-charts" class="row g-4"></div>
             </div>
 
             <div class="tab-pane" id="anomalies">
@@ -175,6 +188,8 @@
         let activePage = 'overview';
         let refreshIntervalId;
         let dashboardMeta = null;
+        let sensorMonitorData = [];
+        let sensorConfigMap = {};
 
         const chartInstances = {};
 
@@ -216,6 +231,8 @@
             const numericValue = Number(value);
             return Number.isFinite(numericValue) ? numericValue.toFixed(digits) : 'N/A';
         };
+
+        const uniqueValues = (items) => Array.from(new Set(items.filter(Boolean)));
 
         const setStatusBanner = (message = '', type = 'warning') => {
             const banner = document.getElementById('status-banner');
@@ -375,34 +392,140 @@
             }
         }
 
-        function renderSensorChart(data) {
-            const ctx = document.getElementById('sensor-chart').getContext('2d');
-            if (chartInstances.sensors) chartInstances.sensors.destroy();
+        function updateSensorFilterOptions(data) {
+            const machineSelect = document.getElementById('sensor-machine-filter');
+            const selectedMachine = machineSelect.value || 'ALL';
 
-            const datasets = {};
-            data.forEach(d => {
-                if (!datasets[d.SensorID]) {
-                    datasets[d.SensorID] = {
-                        label: d.SensorID,
-                        data: [],
-                        fill: false,
-                        tension: 0.1,
-                        hidden: Object.keys(datasets).length >= 10
-                    };
-                }
-                datasets[d.SensorID].data.push({ x: new Date(d.Timestamp), y: d.Value });
+            const machines = uniqueValues(data.map(item => item.Machine)).sort();
+            machineSelect.innerHTML = ['<option value="ALL">All Machines</option>']
+                .concat(machines.map(machine => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`))
+                .join('');
+            machineSelect.value = machines.includes(selectedMachine) ? selectedMachine : 'ALL';
+        }
+
+        function getSensorMonitorFilteredData() {
+            const machineFilter = document.getElementById('sensor-machine-filter').value;
+
+            return sensorMonitorData.filter(item => {
+                const matchesMachine = machineFilter === 'ALL' || item.Machine === machineFilter;
+                return matchesMachine;
             });
+        }
 
-            chartInstances.sensors = new Chart(ctx, {
-                type: 'line',
-                data: { datasets: Object.values(datasets) },
-                options: {
-                    responsive: true,
-                    scales: {
-                        x: { type: 'time', time: { unit: 'minute' }, title: { display: true, text: 'Timestamp' } },
-                        y: { title: { display: true, text: 'Value' } }
-                    }
+        function destroySensorCharts() {
+            Object.keys(chartInstances)
+                .filter(key => key.indexOf('sensor-machine-') === 0)
+                .forEach(key => {
+                    chartInstances[key].destroy();
+                    delete chartInstances[key];
+                });
+        }
+
+        function renderSensorChart(data) {
+            sensorMonitorData = Array.isArray(data) ? data : [];
+            updateSensorFilterOptions(sensorMonitorData);
+
+            const chartContainer = document.getElementById('sensor-machine-charts');
+            const filteredData = getSensorMonitorFilteredData();
+            destroySensorCharts();
+
+            if (!filteredData.length) {
+                chartContainer.innerHTML = '<div class="col-12"><div class="card"><div class="card-body empty-state">No sensor data available for the selected filters.</div></div></div>';
+                return;
+            }
+
+            const groupedBySensor = filteredData.reduce((acc, row) => {
+                if (!acc[row.SensorID]) acc[row.SensorID] = [];
+                acc[row.SensorID].push(row);
+                return acc;
+            }, {});
+
+            chartContainer.innerHTML = Object.keys(groupedBySensor).sort().map(sensorId => {
+                const rows = groupedBySensor[sensorId];
+                const firstRow = rows[0] || {};
+                const config = sensorConfigMap[sensorId] || {};
+                const title = `${firstRow.Machine || config.Machine || 'Unknown'} - ${firstRow.SensorName || config.SensorName || sensorId}`;
+                const subtitle = [
+                    sensorId,
+                    config.Unit || firstRow.Unit || '',
+                    config.WarnThreshold !== undefined && config.WarnThreshold !== '' ? `Warn: ${config.WarnThreshold}` : '',
+                    config.CriticalThreshold !== undefined && config.CriticalThreshold !== '' ? `Critical: ${config.CriticalThreshold}` : ''
+                ].filter(Boolean).join(' | ');
+
+                return `
+                <div class="col-12 col-xl-6">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title mb-1">${escapeHtml(title)}</h5>
+                            <div class="text-muted small mb-3">${escapeHtml(subtitle)}</div>
+                            <canvas id="sensor-chart-${escapeHtml(sensorId)}"></canvas>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            Object.entries(groupedBySensor).forEach(([sensorId, rows]) => {
+                const firstRow = rows[0] || {};
+                const config = sensorConfigMap[sensorId] || {};
+                const sensorDataset = {
+                    label: firstRow.SensorName ? `${firstRow.SensorName} (${sensorId})` : sensorId,
+                    data: [],
+                    fill: false,
+                    tension: 0.1,
+                    borderWidth: 2
+                };
+
+                rows.forEach(row => {
+                    sensorDataset.data.push({ x: new Date(row.Timestamp), y: row.Value });
+                });
+
+                const datasets = [sensorDataset];
+                const warnThreshold = Number(config.WarnThreshold);
+                const criticalThreshold = Number(config.CriticalThreshold);
+
+                if (Number.isFinite(warnThreshold)) {
+                    datasets.push({
+                        label: 'Warning threshold',
+                        data: sensorDataset.data.map(point => ({ x: point.x, y: warnThreshold })),
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 0,
+                        borderDash: [6, 6],
+                        borderColor: '#f0ad4e',
+                        borderWidth: 1.5
+                    });
                 }
+
+                if (Number.isFinite(criticalThreshold)) {
+                    datasets.push({
+                        label: 'Critical threshold',
+                        data: sensorDataset.data.map(point => ({ x: point.x, y: criticalThreshold })),
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 0,
+                        borderDash: [4, 4],
+                        borderColor: '#dc3545',
+                        borderWidth: 1.5
+                    });
+                }
+
+                const canvasId = `sensor-chart-${sensorId}`;
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                chartInstances[`sensor-machine-${sensorId}`] = new Chart(ctx, {
+                    type: 'line',
+                    data: { datasets: datasets },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            mode: 'nearest',
+                            intersect: false
+                        },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'minute' }, title: { display: true, text: 'Timestamp' } },
+                            y: { title: { display: true, text: 'Value' } }
+                        }
+                    }
+                });
             });
         }
 
@@ -498,6 +621,21 @@
             } else if (page === 'cycletime') renderCycleTimeChart(data);
         }
 
+        async function loadSensorConfig() {
+            const data = await fetchData('sensorconfig');
+            if (!Array.isArray(data)) {
+                sensorConfigMap = {};
+                return;
+            }
+
+            sensorConfigMap = data.reduce((acc, row) => {
+                if (row && row.SensorID) {
+                    acc[row.SensorID] = row;
+                }
+                return acc;
+            }, {});
+        }
+
         function handleTabClick(e) {
             e.preventDefault();
             const link = e.target.closest('a');
@@ -513,12 +651,19 @@
             loadPage(activePage);
         }
 
+        function handleSensorFilterChange() {
+            if (activePage !== 'sensors') return;
+            if (!sensorMonitorData.length) return;
+            renderSensorChart(sensorMonitorData);
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('backend-url').textContent = WEB_APP_URL;
             const tabs = document.getElementById('dashboard-tabs');
             tabs.addEventListener('click', handleTabClick);
+            document.getElementById('sensor-machine-filter').addEventListener('change', handleSensorFilterChange);
 
-            loadDashboardMeta().then(() => loadPage(activePage));
+            loadSensorConfig().then(() => loadDashboardMeta()).then(() => loadPage(activePage));
 
             if (refreshIntervalId) clearInterval(refreshIntervalId);
             refreshIntervalId = setInterval(() => loadPage(activePage), REFRESH_INTERVAL);
