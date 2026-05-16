@@ -1,161 +1,142 @@
 /**
- * @OnlyCurrentDoc
- *
- * The doGet function is the entry point for the web app.
- * It serves data from the spreadsheet as JSON, based on the 'page' parameter.
+ * Main entry point for the web app. This function is called when a user visits the web app URL.
+ * It serves the dashboard HTML file or data, depending on the request parameters.
+ * @param {Object} e - The event parameter for a GET request, containing parameters.
+ * @returns {HtmlOutput|ContentService.TextOutput} The appropriate response.
  */
 function doGet(e) {
-  const page = e.parameter.page || 'overview';
-  let data;
+  if (e.parameter.page) {
+    // If a 'page' parameter is present, it's a data request from the dashboard.
+    return handleDataRequest(e.parameter.page);
+  } else {
+    // If no page is specified, serve the main dashboard HTML file.
+    // This allows the dashboard to be hosted directly from Apps Script.
+    // Ensure you have a 'dashboard_.html' file in your Apps Script project.
+    return HtmlService.createHtmlOutputFromFile('dashboard_')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+  }
+}
 
+/**
+ * Handles data requests from the frontend dashboard.
+ * @param {string} page - The specific data page being requested (e.g., 'overview', 'sensors').
+ * @returns {ContentService.TextOutput} The requested data as a JSON string.
+ */
+function handleDataRequest(page) {
+  let data;
   try {
     switch (page) {
       case 'overview':
-        data = getOverviewData();
+        data = getSheetDataAsJson_('MachineSummary');
         break;
       case 'sensors':
-        data = getSensorData();
+        // Return the last 300 sensor readings for performance, converting Date objects to ISO strings.
+        data = getSheetDataAsJson_('SensorData', 300);
         break;
       case 'anomalies':
-        data = getTableData('AnomalyLog', 100);
+        data = getSheetDataAsJson_('AnomalyLog', 200); // Most recent 200 anomalies
         break;
       case 'downtime':
-        data = getTableData('DowntimeLog', 100);
+        data = getSheetDataAsJson_('DowntimeLog', 200); // Most recent 200 downtime entries
         break;
       case 'alarms':
-        data = getTableData('AlarmLog', 100);
+        data = getSheetDataAsJson_('AlarmLog', 200); // Most recent 200 alarm entries
         break;
       case 'cycletime':
-        data = getCycleTimeData();
+        // Return the last 300 cycle time readings, specifically selecting relevant columns.
+        data = getSheetDataAsJson_('RawData', 300, ['Timestamp', 'Machine', 'CycleTime_sec']);
         break;
       default:
         data = { error: 'Invalid page parameter.' };
+        break;
     }
-  } catch (error) {
-    data = { error: 'An error occurred while fetching data: ' + error.message, stack: error.stack };
+  } catch (e) {
+    Logger.log(`Error in handleDataRequest for page ${page}: ${e.message}`);
+    data = { error: `An error occurred while fetching data for ${page}: ${e.message}` };
   }
-
-  return ContentService
-    .createTextOutput(JSON.stringify(data))
+  
+  // Return the data as a JSON string with the appropriate MIME type.
+  return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
- * Retrieves data from the MachineSummary sheet.
+ * Generic helper function to retrieve data from a specified Google Sheet tab
+ * and convert it into an array of JavaScript objects, where each object represents a row.
+ * Headers are taken from the first row of the sheet.
+ * @param {string} sheetName The name of the sheet to retrieve data from (e.g., 'MachineSummary').
+ * @param {number=} maxRows Optional. The maximum number of recent data rows to retrieve.
+ *                          If the sheet has more rows, only the latest 'maxRows' will be returned.
+ * @param {Array<string>=} specificHeaders Optional. An array of specific header names to include.
+ *                                         If provided, only these columns will be returned in the objects.
+ * @returns {Array<Object>} An array of objects, each representing a row of data.
+ *                          Returns an object with an 'error' property if the sheet is not found or headers are missing.
  */
-function getOverviewData() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('MachineSummary');
-  if (!sheet) return { error: 'MachineSummary sheet not found.' };
-  
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-
-  const range = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn());
-  const values = range.getValues();
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  
-  const data = values.map(row => {
-    let obj = {};
-    headers.forEach((header, i) => {
-      obj[header] = row[i];
-    });
-    return obj;
-  });
-  
-  return data;
-}
-
-/**
- * Retrieves the last 200 rows from the SensorData sheet.
- */
-function getSensorData() {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('SensorData');
-    if (!sheet) return { error: 'SensorData sheet not found.' };
-
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return []; // FIX: Handle empty sheet
-
-    const rowCount = 200;
-    const startRow = Math.max(2, lastRow - rowCount + 1);
-    const numRows = lastRow - startRow + 1;
-
-    const range = sheet.getRange(startRow, 1, numRows, sheet.getLastColumn());
-    const values = range.getValues();
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-
-    const data = values.map(row => {
-        let obj = {};
-        headers.forEach((header, i) => {
-            obj[header] = row[i];
-        });
-        return obj;
-    });
-
-    return data;
-}
-
-
-/**
- * Retrieves the last 100 rows from the RawData sheet for cycle time analysis.
- */
-function getCycleTimeData() {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('RawData');
-    if (!sheet) return { error: 'RawData sheet not found.' };
-
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return []; // FIX: Handle empty sheet
-
-    const rowCount = 100;
-    const startRow = Math.max(2, lastRow - rowCount + 1);
-    const numRows = lastRow - startRow + 1;
+function getSheetDataAsJson_(sheetName, maxRows, specificHeaders) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      Logger.log(`Error: Sheet "${sheetName}" not found.`);
+      return [{error: `Sheet "${sheetName}" not found.`}];
+    }
     
-    const range = sheet.getRange(startRow, 1, numRows, sheet.getLastColumn());
-    const values = range.getValues();
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-
-    const data = values.map(row => {
-        let obj = {};
-        headers.forEach((header, i) => {
-            obj[header] = row[i];
-        });
-        return obj;
-    });
-
-    return data;
-}
-
-
-/**
- * A generic function to retrieve data from any given log sheet.
- * @param {string} sheetName The name of the sheet to get data from.
- * @param {number} rowCount The number of recent rows to retrieve.
- */
-function getTableData(sheetName, rowCount = 100) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
-  if (!sheet) return { error: `${sheetName} sheet not found.` };
-  
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return []; // No data rows
-  
-  const startRow = Math.max(2, lastRow - rowCount + 1);
-  const numRows = lastRow - startRow + 1;
-  
-  const range = sheet.getRange(startRow, 1, numRows, sheet.getLastColumn());
-  const values = range.getValues();
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  
-  const data = values.map(row => {
-    let obj = {};
-    headers.forEach((header, i) => {
-      // Handle Date objects
-      if (row[i] instanceof Date) {
-        obj[header] = row[i].toISOString();
-      } else {
-        obj[header] = row[i];
+    const dataRange = sheet.getDataRange();
+    const allValues = dataRange.getValues();
+    
+    if (allValues.length < 1) {
+      // Sheet is completely empty
+      return []; 
+    }
+    
+    const allSheetHeaders = allValues[0];
+    let dataRows = allValues.slice(1); // All rows excluding the header row
+    
+    // Determine which headers to use and their indices
+    let headersToUse = specificHeaders || allSheetHeaders;
+    let headerIndices = headersToUse.map(h => allSheetHeaders.indexOf(h));
+    
+    // Check if all requested specificHeaders exist in the sheet
+    if (specificHeaders) {
+      const missingHeaders = specificHeaders.filter(h => allSheetHeaders.indexOf(h) === -1);
+      if (missingHeaders.length > 0) {
+        Logger.log(`Error: Missing headers in sheet "${sheetName}": ${missingHeaders.join(', ')}`);
+        return [{error: `Missing headers in sheet "${sheetName}": ${missingHeaders.join(', ')}`}];
       }
+    }
+    
+    // If maxRows is specified, get only the most recent rows
+    if (maxRows && dataRows.length > maxRows) {
+        dataRows = dataRows.slice(dataRows.length - maxRows);
+    }
+    
+    // Map data rows to objects
+    const result = dataRows.map(row => {
+      let obj = {};
+      headerIndices.forEach((colIndex, i) => {
+          const header = headersToUse[i];
+          let value = row[colIndex];
+          // Convert Date objects to ISO string format for consistent client-side parsing
+          if (value instanceof Date) {
+            obj[header] = value.toISOString();
+          } else {
+            obj[header] = value;
+          }
+      });
+      return obj;
     });
-    return obj;
-  }).reverse(); // Show most recent first
-  
-  return data;
+
+    // For log-type data, it's often useful to show the most recent first.
+    // This applies to AnomalyLog, DowntimeLog, AlarmLog.
+    if (['AnomalyLog', 'DowntimeLog', 'AlarmLog'].includes(sheetName)) {
+        return result.reverse();
+    }
+    
+    return result;
+
+  } catch (e) {
+    Logger.log(`Error in getSheetDataAsJson_ for sheet "${sheetName}": ${e.message}, Stack: ${e.stack}`);
+    return [{error: `Failed to retrieve data from "${sheetName}": ${e.message}`}];
+  }
 }
