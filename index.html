@@ -229,11 +229,36 @@
             tableBody.innerHTML = `<tr><td class="empty-state">${escapeHtml(message)}</td></tr>`;
         };
 
-        function fetchData(page, attempt = 1) {
+        async function fetchData(page, attempt = 1) {
+            const separator = WEB_APP_URL.includes('?') ? '&' : '?';
+            const cacheBuster = `t=${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+            const jsonUrl = `${WEB_APP_URL}${separator}page=${encodeURIComponent(page)}&${cacheBuster}`;
+
+            try {
+                const response = await fetch(jsonUrl, {
+                    method: 'GET',
+                    mode: 'cors',
+                    redirect: 'follow',
+                    cache: 'no-store'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (data && data.error) {
+                    throw new Error(data.error);
+                }
+
+                if (page !== 'meta') setStatusBanner('');
+                return data;
+            } catch (fetchError) {
+                console.warn(`Fetch failed for ${page}, falling back to JSONP.`, fetchError);
+            }
+
             return new Promise((resolve) => {
                 const callbackName = `aimDashboardJsonp_${page}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-                const separator = WEB_APP_URL.includes('?') ? '&' : '?';
-                const cacheBuster = `t=${Date.now()}_${Math.floor(Math.random() * 100000)}`;
                 const script = document.createElement('script');
                 const cleanup = () => {
                     delete window[callbackName];
