@@ -7,6 +7,8 @@ Files:
 - `em1_prediction_example.py` - regression example for predicting the next `CycleTime_sec`
 - `em1_fault_classification_example.ipynb` - rendered notebook version for GitHub viewing
 - `em1_fault_classification_example.py` - classification example for predicting whether the next EM1 state will be `alarm`
+- `em1_isolation_forest_example.ipynb` - rendered notebook version for GitHub viewing
+- `em1_isolation_forest_example.py` - anomaly detection example using `IsolationForest` for `EM1`
 
 What they do:
 - load `RawData` and `SensorData` from `AIM_MonitoringSystem.xlsx`

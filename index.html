@@ -256,6 +256,24 @@
                             </div>
                         </div>
                     </div>
+                    <div class="col-lg-4">
+                        <div class="card resource-card">
+                            <div class="card-body">
+                                <h5 class="card-title">EM1 Isolation Forest</h5>
+                                <p class="card-text">
+                                    Unsupervised anomaly detection example using `IsolationForest` to flag unusual `EM1` operating behavior.
+                                </p>
+                                <div class="btn-group-stack">
+                                    <a id="ml-iforest-link" class="btn btn-outline-primary w-100 mb-2" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-journal-richtext"></i> Open Notebook
+                                    </a>
+                                    <a id="ml-iforest-raw-link" class="btn btn-outline-secondary w-100" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-code-slash"></i> View Python Source
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -862,7 +880,9 @@
                 'ml-regression-link': `${GITHUB_REPO_URL}/blob/main/notebooks/em1_prediction_example.ipynb`,
                 'ml-regression-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_prediction_example.py`,
                 'ml-classification-link': `${GITHUB_REPO_URL}/blob/main/notebooks/em1_fault_classification_example.ipynb`,
-                'ml-classification-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_fault_classification_example.py`
+                'ml-classification-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_fault_classification_example.py`,
+                'ml-iforest-link': `${GITHUB_REPO_URL}/blob/main/notebooks/em1_isolation_forest_example.ipynb`,
+                'ml-iforest-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_isolation_forest_example.py`
             };
 
             Object.entries(links).forEach(([id, href]) => {
