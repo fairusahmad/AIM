@@ -190,8 +190,30 @@
         let dashboardMeta = null;
         let sensorMonitorData = [];
         let sensorConfigMap = {};
+        let sensorAnomalyData = [];
 
         const chartInstances = {};
+        const sensorChartLabelPlugin = {
+            id: 'sensorChartLabelPlugin',
+            afterDatasetsDraw(chart, args, pluginOptions) {
+                const labels = pluginOptions && pluginOptions.labels ? pluginOptions.labels : [];
+                if (!labels.length) return;
+
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.font = '11px Segoe UI, sans-serif';
+                ctx.fillStyle = '#495057';
+
+                labels.forEach(item => {
+                    const meta = chart.getDatasetMeta(item.datasetIndex);
+                    if (!meta || !meta.data || !meta.data[item.pointIndex]) return;
+                    const point = meta.data[item.pointIndex];
+                    ctx.fillText(item.text, point.x + 6, point.y - 8);
+                });
+
+                ctx.restore();
+            }
+        };
 
         const getStatusColor = (status) => {
             if (!status) return 'secondary';
@@ -421,6 +443,14 @@
                 });
         }
 
+        function getRecentSensorAnomalies(sensorId) {
+            return sensorAnomalyData
+                .filter(item => item.SensorID === sensorId && item.Timestamp)
+                .sort((left, right) => new Date(right.Timestamp) - new Date(left.Timestamp))
+                .slice(0, 5)
+                .reverse();
+        }
+
         function renderSensorChart(data) {
             sensorMonitorData = Array.isArray(data) ? data : [];
             updateSensorFilterOptions(sensorMonitorData);
@@ -444,12 +474,20 @@
                 const rows = groupedBySensor[sensorId];
                 const firstRow = rows[0] || {};
                 const config = sensorConfigMap[sensorId] || {};
+                const maxWarningValue = rows
+                    .filter(row => String(row.Status).toLowerCase() === 'warning')
+                    .reduce((maxValue, row) => Math.max(maxValue, Number(row.Value)), Number.NEGATIVE_INFINITY);
+                const maxCriticalValue = rows
+                    .filter(row => String(row.Status).toLowerCase() === 'critical')
+                    .reduce((maxValue, row) => Math.max(maxValue, Number(row.Value)), Number.NEGATIVE_INFINITY);
                 const title = `${firstRow.Machine || config.Machine || 'Unknown'} - ${firstRow.SensorName || config.SensorName || sensorId}`;
                 const subtitle = [
                     sensorId,
                     config.Unit || firstRow.Unit || '',
                     config.WarnThreshold !== undefined && config.WarnThreshold !== '' ? `Warn: ${config.WarnThreshold}` : '',
-                    config.CriticalThreshold !== undefined && config.CriticalThreshold !== '' ? `Critical: ${config.CriticalThreshold}` : ''
+                    config.CriticalThreshold !== undefined && config.CriticalThreshold !== '' ? `Critical: ${config.CriticalThreshold}` : '',
+                    Number.isFinite(maxWarningValue) ? `Max warning: ${formatNumber(maxWarningValue)}` : '',
+                    Number.isFinite(maxCriticalValue) ? `Max critical: ${formatNumber(maxCriticalValue)}` : ''
                 ].filter(Boolean).join(' | ');
 
                 return `
@@ -467,6 +505,7 @@
             Object.entries(groupedBySensor).forEach(([sensorId, rows]) => {
                 const firstRow = rows[0] || {};
                 const config = sensorConfigMap[sensorId] || {};
+                const recentAnomalies = getRecentSensorAnomalies(sensorId);
                 const sensorDataset = {
                     label: firstRow.SensorName ? `${firstRow.SensorName} (${sensorId})` : sensorId,
                     data: [],
@@ -509,13 +548,41 @@
                     });
                 }
 
+                if (recentAnomalies.length > 0) {
+                    datasets.push({
+                        label: 'Recent anomalies',
+                        data: recentAnomalies.map(item => ({
+                            x: new Date(item.Timestamp),
+                            y: Number(item.Value)
+                        })),
+                        type: 'scatter',
+                        showLine: false,
+                        pointRadius: 5,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#dc3545',
+                        pointBorderColor: '#842029',
+                        pointBorderWidth: 1.5
+                    });
+                }
+
                 const canvasId = `sensor-chart-${sensorId}`;
                 const ctx = document.getElementById(canvasId).getContext('2d');
+                const anomalyDatasetIndex = recentAnomalies.length > 0 ? datasets.length - 1 : -1;
+                const labelItems = recentAnomalies.map((item, index) => ({
+                    datasetIndex: anomalyDatasetIndex,
+                    pointIndex: index,
+                    text: item.AnomalyType || 'Anomaly'
+                }));
                 chartInstances[`sensor-machine-${sensorId}`] = new Chart(ctx, {
                     type: 'line',
                     data: { datasets: datasets },
                     options: {
                         responsive: true,
+                        plugins: {
+                            sensorChartLabelPlugin: {
+                                labels: labelItems
+                            }
+                        },
                         interaction: {
                             mode: 'nearest',
                             intersect: false
@@ -606,11 +673,21 @@
         }
 
         async function loadPage(page) {
+            if (page === 'sensors') {
+                const [sensorData, anomalyData] = await Promise.all([
+                    fetchData('sensors'),
+                    fetchData('anomalies')
+                ]);
+                if (!sensorData) return;
+                sensorAnomalyData = Array.isArray(anomalyData) ? anomalyData : [];
+                renderSensorChart(sensorData);
+                return;
+            }
+
             const data = await fetchData(page);
             if (!data) return;
 
             if (page === 'overview') renderOverview(data);
-            else if (page === 'sensors') renderSensorChart(data);
             else if (page === 'anomalies') renderGenericTable('anomalies', data);
             else if (page === 'downtime') {
                 renderGenericTable('downtime', data);
@@ -662,6 +739,8 @@
             const tabs = document.getElementById('dashboard-tabs');
             tabs.addEventListener('click', handleTabClick);
             document.getElementById('sensor-machine-filter').addEventListener('change', handleSensorFilterChange);
+
+            Chart.register(sensorChartLabelPlugin);
 
             loadSensorConfig().then(() => loadDashboardMeta()).then(() => loadPage(activePage));
 
