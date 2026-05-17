@@ -43,6 +43,13 @@ const FAULT_SCENARIOS = [
   { name: "EM4_HandlerVibration", machine: "EM4", sensors: { EM4_VIBR_01: 7.0, EM4_SPED_01: 57, EM4_CURR_01: 6.8 }, alarm: { code: "AL032", message: "Final handler vibration and speed abnormal" }, cycleTime: 6.4 }
 ];
 const SIMULATOR_MACHINES = ['EM1', 'EM2', 'EM3', 'EM4'];
+const MACHINE_CYCLE_OFFSETS = { EM1: 0, EM2: 5, EM3: 9, EM4: 13 };
+const MACHINE_FAULT_WINDOWS = {
+  EM1: { cycleLength: 31, driftStart: 22, faultStart: 24, faultEnd: 25, downtimeStart: 26, downtimeEnd: 27, idleEnd: 30 },
+  EM2: { cycleLength: 37, driftStart: 25, faultStart: 28, faultEnd: 29, downtimeStart: 30, downtimeEnd: 31, idleEnd: 34 },
+  EM3: { cycleLength: 29, driftStart: 20, faultStart: 22, faultEnd: 23, downtimeStart: 24, downtimeEnd: 24, idleEnd: 27 },
+  EM4: { cycleLength: 41, driftStart: 29, faultStart: 32, faultEnd: 33, downtimeStart: 34, downtimeEnd: 35, idleEnd: 38 }
+};
 
 
 /**
@@ -53,124 +60,133 @@ function runSimulator(triggerArg) {
   markFlowHandlerStart_('runSimulator', {
     triggerSource: triggerArg && triggerArg.triggerUid ? 'trigger' : 'manual'
   });
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const properties = PropertiesService.getScriptProperties();
-  const simulationContext = resolveSimulationContext_(triggerArg);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const properties = PropertiesService.getScriptProperties();
+    const simulationContext = resolveSimulationContext_(triggerArg);
 
-  // Prepare sheets and configs
-  const rawDataSheet = ss.getSheetByName('RawData');
-  const sensorDataSheet = ss.getSheetByName('SensorData');
-  const alarmLogSheet = ss.getSheetByName('AlarmLog');
-  const downtimeLogSheet = ss.getSheetByName('DowntimeLog');
-  const machineSummarySheet = ss.getSheetByName('MachineSummary');
-  const sensorConfigData = ss.getSheetByName('SensorConfig').getDataRange().getValues().slice(1);
-  const allSensorConfigs = sensorConfigData.map(row => ({
-      sensorId: row[0], machine: row[1], name: row[2], type: row[3], unit: row[4],
-      warn: parseFloat(row[5]), crit: parseFloat(row[6]), dir: row[7], active: row[8]
-  }));
+    const rawDataSheet = ss.getSheetByName('RawData');
+    const sensorDataSheet = ss.getSheetByName('SensorData');
+    const alarmLogSheet = ss.getSheetByName('AlarmLog');
+    const downtimeLogSheet = ss.getSheetByName('DowntimeLog');
+    const machineSummarySheet = ss.getSheetByName('MachineSummary');
+    const sensorConfigData = ss.getSheetByName('SensorConfig').getDataRange().getValues().slice(1);
+    const allSensorConfigs = sensorConfigData.map(row => ({
+        sensorId: row[0], machine: row[1], name: row[2], type: row[3], unit: row[4],
+        warn: parseFloat(row[5]), crit: parseFloat(row[6]), dir: row[7], active: row[8]
+    }));
 
-  let rawDataBatch = [], sensorDataBatch = [], alarmLogBatch = [], downtimeLogBatch = [];
+    let rawDataBatch = [], sensorDataBatch = [], alarmLogBatch = [], downtimeLogBatch = [];
 
-  for (const machine of SIMULATOR_MACHINES) {
-    const timestamp = simulationContext.timestamp;
-    let stateCounter = parseInt(properties.getProperty(machine + '_stateCounter') || '0');
-    const cyclePosition = stateCounter % 20; // 20-minute cycle for each machine
+    for (const machine of SIMULATOR_MACHINES) {
+      const timestamp = simulationContext.timestamp;
+      let stateCounter = parseInt(properties.getProperty(machine + '_stateCounter') || '0', 10);
+      const cycleConfig = MACHINE_FAULT_WINDOWS[machine];
+      const cyclePosition = (stateCounter + MACHINE_CYCLE_OFFSETS[machine]) % cycleConfig.cycleLength;
+      const fault = pickFaultScenario_(machine, stateCounter);
 
-    let status = 'running', cycleTime = 0, alarm = null, rejectCount = 0, faultSensors = {};
+      let status = 'running';
+      let cycleTime = 0;
+      let alarm = null;
+      let rejectCount = 0;
+      let faultSensors = {};
 
-    // --- Start of simplified, deterministic logic for demonstration ---
-    // Each machine cycles through a predictable 20-minute pattern to make the demo easy to follow.
-    if (cyclePosition < 15) {
-      // State: NORMAL (15 minutes) - Standard operation with minor variations.
-      status = 'running';
-      cycleTime = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
-      rejectCount = Math.floor(randomFloat(0, 2));
-    } else if (cyclePosition === 15) {
-      // State: DRIFT (1 minute) - Values start to move towards a failure condition.
-      status = 'running';
-      const fault = FAULT_SCENARIOS.filter(f => f.machine === machine)[0];
-      cycleTime = (fault.cycleTime + CYCLE_TIMES[machine].max) / 2; // Cycle time increases
-      rejectCount = 3;
-      // Sensor values are set halfway between normal max and fault value
-      for (const sensorId in fault.sensors) {
-        const normalRange = SENSOR_RANGES[sensorId];
-        if (normalRange) faultSensors[sensorId] = (fault.sensors[sensorId] + normalRange.max) / 2;
+      if (cyclePosition < cycleConfig.driftStart) {
+        status = 'running';
+        cycleTime = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
+        rejectCount = Math.floor(randomFloat(0, 2));
+      } else if (cyclePosition < cycleConfig.faultStart) {
+        status = 'running';
+        cycleTime = (fault.cycleTime + CYCLE_TIMES[machine].max) / 2;
+        rejectCount = Math.floor(randomFloat(2, 4));
+        for (const sensorId in fault.sensors) {
+          const normalRange = SENSOR_RANGES[sensorId];
+          if (normalRange) {
+            faultSensors[sensorId] = interpolateTowardFault_(normalRange.max, fault.sensors[sensorId], 0.55);
+          }
+        }
+      } else if (cyclePosition <= cycleConfig.faultEnd) {
+        status = 'alarm';
+        cycleTime = fault.cycleTime;
+        alarm = fault.alarm;
+        faultSensors = fault.sensors;
+        rejectCount = Math.floor(randomFloat(6, 10));
+      } else if (cyclePosition >= cycleConfig.downtimeStart && cyclePosition <= cycleConfig.downtimeEnd) {
+        status = 'stopped';
+        downtimeLogBatch.push([
+          timestamp,
+          machine,
+          timestamp,
+          null,
+          randomDurationMinutes_(machine, stateCounter),
+          buildDowntimeReason_(fault),
+          'System'
+        ]);
+      } else if (cyclePosition <= cycleConfig.idleEnd) {
+        status = 'idle';
+      } else {
+        status = 'running';
+        cycleTime = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
+        rejectCount = Math.floor(randomFloat(0, 2));
       }
-    } else if (cyclePosition === 16) {
-      // State: FAULT (1 minute) - A specific fault is triggered with an alarm.
-      status = 'alarm';
-      const fault = FAULT_SCENARIOS.filter(f => f.machine === machine)[0];
-      cycleTime = fault.cycleTime;
-      alarm = fault.alarm;
-      faultSensors = fault.sensors;
-      rejectCount = 8;
-    } else if (cyclePosition === 17) {
-      // State: DOWNTIME (1 minute) - Machine is stopped for "maintenance".
-      status = 'stopped';
-      downtimeLogBatch.push([timestamp, machine, timestamp, null, 5, 'Scheduled Demo Downtime', 'System']);
-    } else {
-      // State: IDLE (2 minutes) - Machine is inactive before restarting the cycle.
-      status = 'idle';
-    }
-    // --- End of deterministic state logic ---
 
-    // --- Data Generation and Writing ---
-    const currentSensorData = [];
-    if (status === 'running' || status === 'alarm') {
+      const currentSensorData = [];
+      if (status === 'running' || status === 'alarm') {
         const machineSensors = allSensorConfigs.filter(s =>
           s.machine === machine &&
           s.active &&
           AIM_SIMULATOR_CORE_SENSOR_TYPES.indexOf(s.type) !== -1
         );
         for (const sensor of machineSensors) {
-            let value = faultSensors[sensor.sensorId];
-            if (value === undefined) {
-                const range = SENSOR_RANGES[sensor.sensorId];
-                value = range ? randomFloat(range.min, range.max) : 0;
-            }
-            let sensorStatus = 'normal';
-            if (sensor.dir === 'above') {
-                if (value >= sensor.crit) sensorStatus = 'critical';
-                else if (value >= sensor.warn) sensorStatus = 'warning';
-            } else {
-                if (value <= sensor.crit) sensorStatus = 'critical';
-                else if (value <= sensor.warn) sensorStatus = 'warning';
-            }
-            currentSensorData.push([timestamp, machine, sensor.sensorId, sensor.name, sensor.type, value, sensor.unit, sensorStatus]);
+          let value = faultSensors[sensor.sensorId];
+          if (value === undefined) {
+            const range = SENSOR_RANGES[sensor.sensorId];
+            value = range ? randomFloat(range.min, range.max) : 0;
+          }
+          let sensorStatus = 'normal';
+          if (sensor.dir === 'above') {
+            if (value >= sensor.crit) sensorStatus = 'critical';
+            else if (value >= sensor.warn) sensorStatus = 'warning';
+          } else {
+            if (value <= sensor.crit) sensorStatus = 'critical';
+            else if (value <= sensor.warn) sensorStatus = 'warning';
+          }
+          currentSensorData.push([timestamp, machine, sensor.sensorId, sensor.name, sensor.type, value, sensor.unit, sensorStatus]);
         }
-    }
-    
-    if (status !== 'idle') {
-      if (status !== 'stopped') {
-        rawDataBatch.push([timestamp, machine, status, cycleTime, alarm ? alarm.code : null, alarm ? alarm.message : null, rejectCount, 'Simulated']);
       }
-      if(currentSensorData.length > 0) sensorDataBatch.push(...currentSensorData);
-      if(alarm) alarmLogBatch.push([timestamp, machine, alarm.code, alarm.message]);
-    }
-    
-    // Update MachineSummary directly
-    updateMachineSummaryForSimulator(machineSummarySheet, machine, timestamp, status, cycleTime, alarm, rejectCount);
 
-    // For live demo, increment the state counter. For historical, it remains at 0.
+      if (status !== 'idle') {
+        if (status !== 'stopped') {
+          rawDataBatch.push([timestamp, machine, status, cycleTime, alarm ? alarm.code : null, alarm ? alarm.message : null, rejectCount, 'Simulated']);
+        }
+        if (currentSensorData.length > 0) sensorDataBatch.push(...currentSensorData);
+        if (alarm) alarmLogBatch.push([timestamp, machine, alarm.code, alarm.message]);
+      }
+
+      updateMachineSummaryForSimulator(machineSummarySheet, machine, timestamp, status, cycleTime, alarm, rejectCount);
+
+      if (!simulationContext.isHistorical) {
+        properties.setProperty(machine + '_stateCounter', (stateCounter + 1).toString());
+      }
+    }
+
+    if (rawDataBatch.length > 0) rawDataSheet.getRange(rawDataSheet.getLastRow() + 1, 1, rawDataBatch.length, rawDataBatch[0].length).setValues(rawDataBatch);
+    if (sensorDataBatch.length > 0) sensorDataSheet.getRange(sensorDataSheet.getLastRow() + 1, 1, sensorDataBatch.length, sensorDataBatch[0].length).setValues(sensorDataBatch);
+    if (alarmLogBatch.length > 0) alarmLogSheet.getRange(alarmLogSheet.getLastRow() + 1, 1, alarmLogBatch.length, alarmLogBatch[0].length).setValues(alarmLogBatch);
+    if (downtimeLogBatch.length > 0) downtimeLogSheet.getRange(downtimeLogSheet.getLastRow() + 1, 1, downtimeLogBatch.length, downtimeLogBatch[0].length).setValues(downtimeLogBatch);
+
     if (!simulationContext.isHistorical) {
-      properties.setProperty(machine + '_stateCounter', (stateCounter + 1).toString());
+      runAnomalyCheck();
     }
-  }
-  
-  // Batch write to sheets to improve performance
-  if(rawDataBatch.length > 0) rawDataSheet.getRange(rawDataSheet.getLastRow() + 1, 1, rawDataBatch.length, rawDataBatch[0].length).setValues(rawDataBatch);
-  if(sensorDataBatch.length > 0) sensorDataSheet.getRange(sensorDataSheet.getLastRow() + 1, 1, sensorDataBatch.length, sensorDataBatch[0].length).setValues(sensorDataBatch);
-  if(alarmLogBatch.length > 0) alarmLogSheet.getRange(alarmLogSheet.getLastRow() + 1, 1, alarmLogBatch.length, alarmLogBatch[0].length).setValues(alarmLogBatch);
-  if(downtimeLogBatch.length > 0) downtimeLogSheet.getRange(downtimeLogSheet.getLastRow() + 1, 1, downtimeLogBatch.length, downtimeLogBatch[0].length).setValues(downtimeLogBatch);
 
-  // Run anomaly detection engine if it's a live run
-  if (!simulationContext.isHistorical) {
-  runAnomalyCheck();
-  markFlowHandlerSuccess_('runSimulator', {
-    machinesProcessed: SIMULATOR_MACHINES.length,
-    timestamp: simulationContext.timestamp
-  });
-}
+    markFlowHandlerSuccess_('runSimulator', {
+      machinesProcessed: SIMULATOR_MACHINES.length,
+      timestamp: simulationContext.timestamp
+    });
+  } catch (err) {
+    markFlowHandlerError_('runSimulator', err);
+    throw err;
+  }
 }
 
 function updateMachineSummaryForSimulator(sheet, machine, timestamp, status, cycleTime, alarm, rejectCount) {
@@ -266,4 +282,31 @@ function resetSimulatorState() {
 
 function randomFloat(min, max) {
   return Math.random() * (max - min) + min;
+}
+
+function pickFaultScenario_(machine, stateCounter) {
+  const machineFaults = FAULT_SCENARIOS.filter(function(fault) {
+    return fault.machine === machine;
+  });
+  const faultIndex = Math.floor((stateCounter + MACHINE_CYCLE_OFFSETS[machine]) / 2) % machineFaults.length;
+  return machineFaults[faultIndex];
+}
+
+function interpolateTowardFault_(normalValue, faultValue, factor) {
+  return normalValue + ((faultValue - normalValue) * factor);
+}
+
+function randomDurationMinutes_(machine, stateCounter) {
+  const baseDurations = {
+    EM1: [4, 6, 8],
+    EM2: [5, 7, 9],
+    EM3: [3, 5, 6],
+    EM4: [4, 6, 7]
+  };
+  const options = baseDurations[machine] || [5];
+  return options[stateCounter % options.length];
+}
+
+function buildDowntimeReason_(fault) {
+  return 'Inspection after ' + fault.name.replace(/_/g, ' ');
 }
