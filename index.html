@@ -214,6 +214,15 @@
                 ctx.restore();
             }
         };
+        const SENSOR_ANOMALY_LEGEND = {
+            SensorWarning: 'Sensor value entered the warning range.',
+            SensorCritical: 'Sensor value entered the critical range.',
+            SensorDrift: 'Sensor value drifted away from its recent baseline.',
+            CycleTimeWarning: 'Cycle time exceeded the warning threshold.',
+            CycleTimeCritical: 'Cycle time exceeded the critical threshold.',
+            RepeatedAlarm: 'Alarm repeated too often within the configured window.',
+            NoSignal: 'No fresh signal was received within the timeout window.'
+        };
 
         const getStatusColor = (status) => {
             if (!status) return 'secondary';
@@ -500,6 +509,10 @@
                         <div class="card-body">
                             <h5 class="card-title mb-1">${escapeHtml(title)}</h5>
                             <div class="text-muted small mb-3">${escapeHtml(subtitle)}</div>
+                            <div class="small mb-3">
+                                <span class="badge text-bg-warning me-2">SensorWarning</span> value entered warning range
+                                <span class="badge text-bg-danger ms-3 me-2">SensorDrift</span> value drifted from recent baseline
+                            </div>
                             <canvas id="sensor-chart-${escapeHtml(sensorId)}"></canvas>
                         </div>
                     </div>
@@ -589,6 +602,24 @@
                     options: {
                         responsive: true,
                         plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    afterBody: function(context) {
+                                        const firstPoint = context && context[0];
+                                        if (!firstPoint || firstPoint.dataset.label !== 'Recent anomalies') return [];
+                                        const anomaly = recentAnomalies[firstPoint.dataIndex];
+                                        if (!anomaly) return [];
+                                        const lines = [];
+                                        if (anomaly.AnomalyType && SENSOR_ANOMALY_LEGEND[anomaly.AnomalyType]) {
+                                            lines.push(SENSOR_ANOMALY_LEGEND[anomaly.AnomalyType]);
+                                        }
+                                        if (anomaly.Description) {
+                                            lines.push(anomaly.Description);
+                                        }
+                                        return lines;
+                                    }
+                                }
+                            },
                             sensorChartLabelPlugin: {
                                 labels: labelItems
                             }
