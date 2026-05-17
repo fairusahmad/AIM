@@ -68,6 +68,16 @@
             color: #adb5bd;
             word-break: break-word;
         }
+        .resource-card {
+            height: 100%;
+        }
+        .resource-card .card-body {
+            display: flex;
+            flex-direction: column;
+        }
+        .resource-card .btn-group-stack {
+            margin-top: auto;
+        }
     </style>
 </head>
 <body>
@@ -83,6 +93,7 @@
             <li class="nav-item"><a class="nav-link" href="#downtime" data-page="downtime"><i class="bi bi-clock-history"></i> Downtime Log</a></li>
             <li class="nav-item"><a class="nav-link" href="#alarms" data-page="alarms"><i class="bi bi-bell-fill"></i> Alarm Log</a></li>
             <li class="nav-item"><a class="nav-link" href="#cycletime" data-page="cycletime"><i class="bi bi-speedometer2"></i> Cycle Time Trend</a></li>
+            <li class="nav-item"><a class="nav-link" href="#ml" data-page="ml"><i class="bi bi-cpu-fill"></i> ML Lab</a></li>
         </ul>
         <hr>
         <div class="bottom-links">
@@ -179,11 +190,81 @@
                     </div>
                 </div>
             </div>
+
+            <div class="tab-pane" id="ml">
+                <h3>Machine Learning Lab</h3>
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">EM1 Notebook Examples</h5>
+                        <p class="card-text mb-2">
+                            Open the Python notebook-style examples from GitHub to explore simple machine learning workflows for `EM1`.
+                        </p>
+                        <p class="text-muted small mb-0">
+                            These examples are designed for GitHub and VS Code `# %%` cells, and use workbook data from `AIM_MonitoringSystem.xlsx`.
+                        </p>
+                    </div>
+                </div>
+                <div class="row g-4">
+                    <div class="col-lg-4">
+                        <div class="card resource-card">
+                            <div class="card-body">
+                                <h5 class="card-title">Notebook Guide</h5>
+                                <p class="card-text">
+                                    Overview of the EM1 machine learning examples, required Python packages, and how to run them locally.
+                                </p>
+                                <div class="btn-group-stack">
+                                    <a id="ml-readme-link" class="btn btn-outline-primary w-100" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-book"></i> Open README
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="card resource-card">
+                            <div class="card-body">
+                                <h5 class="card-title">EM1 Cycle Time Prediction</h5>
+                                <p class="card-text">
+                                    Regression example using `RandomForestRegressor` to predict the next `CycleTime_sec` for `EM1`.
+                                </p>
+                                <div class="btn-group-stack">
+                                    <a id="ml-regression-link" class="btn btn-outline-primary w-100 mb-2" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-github"></i> View on GitHub
+                                    </a>
+                                    <a id="ml-regression-raw-link" class="btn btn-outline-secondary w-100" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-download"></i> Open Raw File
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="card resource-card">
+                            <div class="card-body">
+                                <h5 class="card-title">EM1 Fault / Alarm Classification</h5>
+                                <p class="card-text">
+                                    Classification example using `RandomForestClassifier` to predict whether the next `EM1` state becomes `alarm`.
+                                </p>
+                                <div class="btn-group-stack">
+                                    <a id="ml-classification-link" class="btn btn-outline-primary w-100 mb-2" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-github"></i> View on GitHub
+                                    </a>
+                                    <a id="ml-classification-raw-link" class="btn btn-outline-secondary w-100" target="_blank" rel="noopener noreferrer">
+                                        <i class="bi bi-download"></i> Open Raw File
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
     <script>
         const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwQAtFk9RJNGNiIx9p9XSs4wqGEGRvndaKQWbyPhqP8pstoAIsePZWBSahPL9fyo2oT/exec';
+        const GITHUB_REPO_URL = 'https://github.com/fairusahmad/AIM';
+        const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/fairusahmad/AIM/main';
         const REFRESH_INTERVAL = 30000;
         let activePage = 'overview';
         let refreshIntervalId;
@@ -775,6 +856,21 @@
             renderSensorChart(sensorMonitorData);
         }
 
+        function setupMlLinks() {
+            const links = {
+                'ml-readme-link': `${GITHUB_REPO_URL}/blob/main/notebooks/README.md`,
+                'ml-regression-link': `${GITHUB_REPO_URL}/blob/main/notebooks/em1_prediction_example.py`,
+                'ml-regression-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_prediction_example.py`,
+                'ml-classification-link': `${GITHUB_REPO_URL}/blob/main/notebooks/em1_fault_classification_example.py`,
+                'ml-classification-raw-link': `${GITHUB_RAW_BASE_URL}/notebooks/em1_fault_classification_example.py`
+            };
+
+            Object.entries(links).forEach(([id, href]) => {
+                const element = document.getElementById(id);
+                if (element) element.href = href;
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('backend-url').textContent = WEB_APP_URL;
             const tabs = document.getElementById('dashboard-tabs');
@@ -782,6 +878,7 @@
             document.getElementById('sensor-machine-filter').addEventListener('change', handleSensorFilterChange);
 
             Chart.register(sensorChartLabelPlugin);
+            setupMlLinks();
 
             loadSensorConfig().then(() => loadDashboardMeta()).then(() => loadPage(activePage));
 
