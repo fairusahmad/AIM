@@ -322,6 +322,17 @@
             RepeatedAlarm: 'Alarm repeated too often within the configured window.',
             NoSignal: 'No fresh signal was received within the timeout window.'
         };
+        const FRIENDLY_LOADING_MESSAGES = {
+            default: 'Please wait while the dashboard loads the latest data.',
+            meta: 'Please wait while the dashboard connects.',
+            sensorconfig: 'Please wait while sensor settings are loading.',
+            sensors: 'Please wait while sensor data is loading.',
+            anomalies: 'Please wait while anomaly data is loading.',
+            alarms: 'Please wait while alarm data is loading.',
+            downtime: 'Please wait while downtime data is loading.',
+            cycletime: 'Please wait while cycle time data is loading.',
+            overview: 'Please wait while the latest machine overview is loading.'
+        };
 
         const getStatusColor = (status) => {
             if (!status) return 'secondary';
@@ -371,6 +382,8 @@
             banner.classList.toggle('show', Boolean(message));
         };
 
+        const getFriendlyLoadingMessage = (page) => FRIENDLY_LOADING_MESSAGES[page] || FRIENDLY_LOADING_MESSAGES.default;
+
         const renderEmptyState = (tableHead, tableBody, message) => {
             tableHead.innerHTML = '';
             tableBody.innerHTML = `<tr><td class="empty-state">${escapeHtml(message)}</td></tr>`;
@@ -380,6 +393,10 @@
             const separator = WEB_APP_URL.includes('?') ? '&' : '?';
             const cacheBuster = `t=${Date.now()}_${Math.floor(Math.random() * 100000)}`;
             const jsonUrl = `${WEB_APP_URL}${separator}page=${encodeURIComponent(page)}&${cacheBuster}`;
+
+            if (attempt === 1) {
+                setStatusBanner(getFriendlyLoadingMessage(page), 'info');
+            }
 
             try {
                 const response = await fetch(jsonUrl, {
@@ -422,7 +439,7 @@
                         return;
                     }
                     console.error(`JSONP request failed for ${page}:`, reason);
-                    setStatusBanner(`Failed to load ${page} data from Apps Script backend: ${reason}`, 'danger');
+                    setStatusBanner(getFriendlyLoadingMessage(page), 'info');
                     resolve(null);
                 };
 
@@ -435,7 +452,7 @@
                     cleanup();
                     if (data && data.error) {
                         console.error('Apps Script returned an error:', data.error);
-                        setStatusBanner(`Failed to load ${page} data from Apps Script backend: ${data.error}`, 'danger');
+                        setStatusBanner(getFriendlyLoadingMessage(page), 'info');
                         resolve(null);
                         return;
                     }
