@@ -443,9 +443,13 @@
                 });
         }
 
-        function getRecentSensorAnomalies(sensorId) {
+        function getRecentSensorAnomalies(sensorId, startTime, endTime) {
             return sensorAnomalyData
-                .filter(item => item.SensorID === sensorId && item.Timestamp)
+                .filter(item => {
+                    if (item.SensorID !== sensorId || !item.Timestamp) return false;
+                    const itemTime = new Date(item.Timestamp).getTime();
+                    return itemTime >= startTime && itemTime <= endTime;
+                })
                 .sort((left, right) => new Date(right.Timestamp) - new Date(left.Timestamp))
                 .slice(0, 5)
                 .reverse();
@@ -505,7 +509,6 @@
             Object.entries(groupedBySensor).forEach(([sensorId, rows]) => {
                 const firstRow = rows[0] || {};
                 const config = sensorConfigMap[sensorId] || {};
-                const recentAnomalies = getRecentSensorAnomalies(sensorId);
                 const sensorDataset = {
                     label: firstRow.SensorName ? `${firstRow.SensorName} (${sensorId})` : sensorId,
                     data: [],
@@ -517,6 +520,13 @@
                 rows.forEach(row => {
                     sensorDataset.data.push({ x: new Date(row.Timestamp), y: row.Value });
                 });
+
+                const sensorTimes = sensorDataset.data.map(point => point.x.getTime()).filter(Number.isFinite);
+                const startTime = Math.min.apply(null, sensorTimes);
+                const endTime = Math.max.apply(null, sensorTimes);
+                const recentAnomalies = Number.isFinite(startTime) && Number.isFinite(endTime)
+                    ? getRecentSensorAnomalies(sensorId, startTime, endTime)
+                    : [];
 
                 const datasets = [sensorDataset];
                 const warnThreshold = Number(config.WarnThreshold);
