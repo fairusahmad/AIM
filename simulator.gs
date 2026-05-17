@@ -50,6 +50,18 @@ const MACHINE_FAULT_WINDOWS = {
   EM3: { cycleLength: 29, driftStart: 20, faultStart: 22, faultEnd: 23, downtimeStart: 24, downtimeEnd: 24, idleEnd: 27 },
   EM4: { cycleLength: 41, driftStart: 29, faultStart: 32, faultEnd: 33, downtimeStart: 34, downtimeEnd: 35, idleEnd: 38 }
 };
+const MACHINE_EVENT_PROFILES = {
+  EM1: { faultProbability: 0.65, downtimeProbability: 0.7, idleProbability: 0.25 },
+  EM2: { faultProbability: 0.5, downtimeProbability: 0.45, idleProbability: 0.18 },
+  EM3: { faultProbability: 0.42, downtimeProbability: 0.35, idleProbability: 0.15 },
+  EM4: { faultProbability: 0.3, downtimeProbability: 0.2, idleProbability: 0.12 }
+};
+const MACHINE_MINOR_EVENT_PROFILES = {
+  EM1: { probability: 0.35, cycleTimeLift: [0.3, 0.7] },
+  EM2: { probability: 0.28, cycleTimeLift: [0.2, 0.6] },
+  EM3: { probability: 0.25, cycleTimeLift: [0.15, 0.45] },
+  EM4: { probability: 0.2, cycleTimeLift: [0.1, 0.35] }
+};
 
 
 /**
@@ -83,7 +95,9 @@ function runSimulator(triggerArg) {
       let stateCounter = parseInt(properties.getProperty(machine + '_stateCounter') || '0', 10);
       const cycleConfig = MACHINE_FAULT_WINDOWS[machine];
       const cyclePosition = (stateCounter + MACHINE_CYCLE_OFFSETS[machine]) % cycleConfig.cycleLength;
-      const fault = pickFaultScenario_(machine, stateCounter);
+      const cycleIndex = Math.floor((stateCounter + MACHINE_CYCLE_OFFSETS[machine]) / cycleConfig.cycleLength);
+      const cyclePlan = buildMachineCyclePlan_(machine, cycleIndex, cycleConfig);
+      const fault = cyclePlan.fault;
 
       let status = 'running';
       let cycleTime = 0;
@@ -91,39 +105,48 @@ function runSimulator(triggerArg) {
       let rejectCount = 0;
       let faultSensors = {};
 
-      if (cyclePosition < cycleConfig.driftStart) {
+      if (cyclePlan.hasFault && cyclePosition >= cyclePlan.eventStart && cyclePosition < cyclePlan.faultStart) {
         status = 'running';
-        cycleTime = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
-        rejectCount = Math.floor(randomFloat(0, 2));
-      } else if (cyclePosition < cycleConfig.faultStart) {
-        status = 'running';
-        cycleTime = (fault.cycleTime + CYCLE_TIMES[machine].max) / 2;
-        rejectCount = Math.floor(randomFloat(2, 4));
+        cycleTime = blendCycleTime_(machine, fault, cyclePlan, cyclePosition, 'drift');
+        rejectCount = Math.floor(randomFloat(1, 4));
         for (const sensorId in fault.sensors) {
           const normalRange = SENSOR_RANGES[sensorId];
           if (normalRange) {
-            faultSensors[sensorId] = interpolateTowardFault_(normalRange.max, fault.sensors[sensorId], 0.55);
+            faultSensors[sensorId] = buildSensorFaultValue_(normalRange, fault.sensors[sensorId], cyclePlan, cyclePosition, 'drift');
           }
         }
-      } else if (cyclePosition <= cycleConfig.faultEnd) {
+      } else if (cyclePlan.hasFault && cyclePosition >= cyclePlan.faultStart && cyclePosition <= cyclePlan.faultEnd) {
         status = 'alarm';
-        cycleTime = fault.cycleTime;
+        cycleTime = blendCycleTime_(machine, fault, cyclePlan, cyclePosition, 'fault');
         alarm = fault.alarm;
-        faultSensors = fault.sensors;
-        rejectCount = Math.floor(randomFloat(6, 10));
-      } else if (cyclePosition >= cycleConfig.downtimeStart && cyclePosition <= cycleConfig.downtimeEnd) {
+        rejectCount = Math.floor(randomFloat(5, 10));
+        for (const sensorId in fault.sensors) {
+          const normalRange = SENSOR_RANGES[sensorId];
+          if (normalRange) {
+            faultSensors[sensorId] = buildSensorFaultValue_(normalRange, fault.sensors[sensorId], cyclePlan, cyclePosition, 'fault');
+          }
+        }
+      } else if (cyclePlan.hasDowntime && cyclePosition >= cyclePlan.downtimeStart && cyclePosition <= cyclePlan.downtimeEnd) {
         status = 'stopped';
         downtimeLogBatch.push([
           timestamp,
           machine,
           timestamp,
           null,
-          randomDurationMinutes_(machine, stateCounter),
-          buildDowntimeReason_(fault),
+          cyclePlan.downtimeDuration,
+          buildDowntimeReason_(fault, cyclePlan),
           'System'
         ]);
-      } else if (cyclePosition <= cycleConfig.idleEnd) {
+      } else if (cyclePlan.hasRecovery && cyclePosition >= cyclePlan.recoveryStart && cyclePosition <= cyclePlan.recoveryEnd) {
+        status = 'running';
+        cycleTime = blendCycleTime_(machine, fault, cyclePlan, cyclePosition, 'recovery');
+        rejectCount = Math.floor(randomFloat(0, 2));
+      } else if (cyclePlan.hasIdle && cyclePosition >= cyclePlan.idleStart && cyclePosition <= cyclePlan.idleEnd) {
         status = 'idle';
+      } else if (cyclePlan.hasMinorDisturbance && cyclePosition >= cyclePlan.minorStart && cyclePosition <= cyclePlan.minorEnd) {
+        status = 'running';
+        cycleTime = buildMinorDisturbanceCycleTime_(machine, cyclePlan);
+        rejectCount = Math.floor(randomFloat(0, 2));
       } else {
         status = 'running';
         cycleTime = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
@@ -292,11 +315,66 @@ function pickFaultScenario_(machine, stateCounter) {
   return machineFaults[faultIndex];
 }
 
+function buildMachineCyclePlan_(machine, cycleIndex, cycleConfig) {
+  const profile = MACHINE_EVENT_PROFILES[machine];
+  const minorProfile = MACHINE_MINOR_EVENT_PROFILES[machine];
+  const fault = pickFaultScenario_(machine, cycleIndex * 3);
+  const faultRoll = seededRatio_(machine + '_fault_' + cycleIndex);
+  const downtimeRoll = seededRatio_(machine + '_downtime_' + cycleIndex);
+  const idleRoll = seededRatio_(machine + '_idle_' + cycleIndex);
+  const startRoll = seededRatio_(machine + '_start_' + cycleIndex);
+  const severityRoll = seededRatio_(machine + '_severity_' + cycleIndex);
+  const durationRoll = seededRatio_(machine + '_duration_' + cycleIndex);
+  const minorRoll = seededRatio_(machine + '_minor_' + cycleIndex);
+
+  const hasFault = faultRoll < profile.faultProbability;
+  const hasDowntime = hasFault && downtimeRoll < profile.downtimeProbability;
+  const hasIdle = !hasDowntime && idleRoll < profile.idleProbability;
+  const hasMinorDisturbance = !hasFault && minorRoll < minorProfile.probability;
+  const driftLength = 2 + Math.floor(durationRoll * 2);
+  const faultLength = 1 + Math.floor(severityRoll * 2);
+  const eventStart = Math.max(8, cycleConfig.driftStart - 4 + Math.floor(startRoll * 6));
+  const faultStart = eventStart + driftLength;
+  const faultEnd = Math.min(faultStart + faultLength - 1, cycleConfig.cycleLength - 3);
+  const downtimeStart = hasDowntime ? faultEnd + 1 : -1;
+  const downtimeDuration = randomDurationMinutes_(machine, cycleIndex);
+  const downtimeLength = hasDowntime ? 1 + Math.floor(seededRatio_(machine + '_downlength_' + cycleIndex) * 2) : 0;
+  const downtimeEnd = hasDowntime ? Math.min(downtimeStart + downtimeLength - 1, cycleConfig.cycleLength - 2) : -1;
+  const recoveryStart = hasFault ? faultEnd + 1 : -1;
+  const recoveryLength = hasFault ? 2 + Math.floor(seededRatio_(machine + '_recovery_' + cycleIndex) * 3) : 0;
+  const recoveryEnd = hasFault ? Math.min(recoveryStart + recoveryLength - 1, cycleConfig.cycleLength - 1) : -1;
+  const idleStart = hasIdle ? Math.max(recoveryEnd + 1, cycleConfig.idleEnd - 1) : -1;
+  const minorStart = hasMinorDisturbance ? 6 + Math.floor(startRoll * 10) : -1;
+  const minorEnd = hasMinorDisturbance ? minorStart + 1 + Math.floor(durationRoll * 2) : -1;
+
+  return {
+    fault: fault,
+    hasFault: hasFault,
+    hasDowntime: hasDowntime,
+    hasIdle: hasIdle,
+    hasMinorDisturbance: hasMinorDisturbance,
+    eventStart: eventStart,
+    faultStart: faultStart,
+    faultEnd: faultEnd,
+    downtimeStart: downtimeStart,
+    downtimeEnd: downtimeEnd,
+    downtimeDuration: downtimeDuration,
+    hasRecovery: hasFault,
+    recoveryStart: recoveryStart,
+    recoveryEnd: recoveryEnd,
+    idleStart: idleStart,
+    idleEnd: cycleConfig.idleEnd,
+    minorStart: minorStart,
+    minorEnd: minorEnd,
+    severity: 0.55 + (severityRoll * 0.45)
+  };
+}
+
 function interpolateTowardFault_(normalValue, faultValue, factor) {
   return normalValue + ((faultValue - normalValue) * factor);
 }
 
-function randomDurationMinutes_(machine, stateCounter) {
+function randomDurationMinutes_(machine, cycleIndex) {
   const baseDurations = {
     EM1: [4, 6, 8],
     EM2: [5, 7, 9],
@@ -304,9 +382,78 @@ function randomDurationMinutes_(machine, stateCounter) {
     EM4: [4, 6, 7]
   };
   const options = baseDurations[machine] || [5];
-  return options[stateCounter % options.length];
+  return options[cycleIndex % options.length];
 }
 
-function buildDowntimeReason_(fault) {
-  return 'Inspection after ' + fault.name.replace(/_/g, ' ');
+function buildDowntimeReason_(fault, cyclePlan) {
+  if (!cyclePlan.hasFault) {
+    return 'Short operational check';
+  }
+
+  const reasons = [
+    'Inspection after ' + fault.name.replace(/_/g, ' '),
+    'Operator intervention after ' + fault.alarm.message,
+    'Stabilization after ' + fault.name.replace(/_/g, ' ')
+  ];
+  const index = Math.floor(seededRatio_(fault.name + '_reason') * reasons.length) % reasons.length;
+  return reasons[index];
+}
+
+function blendCycleTime_(machine, fault, cyclePlan, cyclePosition, stage) {
+  const normalMid = (CYCLE_TIMES[machine].min + CYCLE_TIMES[machine].max) / 2;
+  const faultTarget = normalMid + ((fault.cycleTime - normalMid) * cyclePlan.severity);
+
+  if (stage === 'drift') {
+    const progress = normalizedProgress_(cyclePosition, cyclePlan.eventStart, cyclePlan.faultStart);
+    return normalMid + ((faultTarget - normalMid) * (0.35 + (progress * 0.45)));
+  }
+
+  if (stage === 'fault') {
+    const progress = normalizedProgress_(cyclePosition, cyclePlan.faultStart, cyclePlan.faultEnd + 1);
+    return faultTarget + (progress * 0.18);
+  }
+
+  if (stage === 'recovery') {
+    const progress = normalizedProgress_(cyclePosition, cyclePlan.recoveryStart, cyclePlan.recoveryEnd + 1);
+    return faultTarget - ((faultTarget - normalMid) * progress);
+  }
+
+  return normalMid;
+}
+
+function buildSensorFaultValue_(normalRange, faultValue, cyclePlan, cyclePosition, stage) {
+  const normalMid = (normalRange.min + normalRange.max) / 2;
+  const scaledTarget = normalMid + ((faultValue - normalMid) * cyclePlan.severity);
+
+  if (stage === 'drift') {
+    const progress = normalizedProgress_(cyclePosition, cyclePlan.eventStart, cyclePlan.faultStart);
+    return normalMid + ((scaledTarget - normalMid) * (0.35 + (progress * 0.45)));
+  }
+
+  if (stage === 'fault') {
+    return scaledTarget;
+  }
+
+  return normalMid;
+}
+
+function buildMinorDisturbanceCycleTime_(machine, cyclePlan) {
+  const profile = MACHINE_MINOR_EVENT_PROFILES[machine];
+  const base = randomFloat(CYCLE_TIMES[machine].min, CYCLE_TIMES[machine].max);
+  const lift = randomFloat(profile.cycleTimeLift[0], profile.cycleTimeLift[1]);
+  return base + lift;
+}
+
+function normalizedProgress_(value, start, endExclusive) {
+  const span = Math.max(endExclusive - start, 1);
+  return Math.min(Math.max((value - start) / span, 0), 1);
+}
+
+function seededRatio_(key) {
+  let hash = 0;
+  for (let index = 0; index < key.length; index++) {
+    hash = ((hash << 5) - hash) + key.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash % 1000) / 1000;
 }
