@@ -343,6 +343,7 @@
             cycletime: 'Please wait while cycle time data is loading.',
             overview: 'Please wait while the latest machine overview is loading.'
         };
+        const DASHBOARD_LIVE_MESSAGE = 'Dashboard is live.';
 
         const getStatusColor = (status) => {
             if (!status) return 'secondary';
@@ -495,6 +496,8 @@
                 spreadsheetLink.classList.remove('disabled');
                 spreadsheetLink.removeAttribute('aria-disabled');
             }
+
+            setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
         }
 
         function renderOverview(data) {
@@ -863,6 +866,7 @@
                 if (!sensorData) return;
                 sensorAnomalyData = Array.isArray(anomalyData) ? anomalyData : [];
                 renderSensorChart(sensorData);
+                setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
                 return;
             }
 
@@ -878,6 +882,8 @@
                 renderGenericTable('alarms', data);
                 renderAnalysisCharts('alarms', data);
             } else if (page === 'cycletime') renderCycleTimeChart(data);
+
+            setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
         }
 
         async function loadSensorConfig() {
@@ -893,6 +899,10 @@
                 }
                 return acc;
             }, {});
+
+            if (activePage !== 'overview') {
+                setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
+            }
         }
 
         function handleTabClick(e) {
