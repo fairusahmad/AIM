@@ -27,7 +27,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CURRENT_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+PROJECT_ROOT = CURRENT_DIR.parent if CURRENT_DIR.name == "notebooks" else CURRENT_DIR
 WORKBOOK_PATH = PROJECT_ROOT / "AIM_MonitoringSystem.xlsx"
 TARGET_MACHINE = "EM1"
 
