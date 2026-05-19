@@ -290,7 +290,7 @@
     </main>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwQAtFk9RJNGNiIx9p9XSs4wqGEGRvndaKQWbyPhqP8pstoAIsePZWBSahPL9fyo2oT/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwlVLPJG_P8zySzJlSZq3HZ1KmH-JoeKXgX67F5g6Zknlj6FgTQ7WVh-5LAd3m7Mkh8/exec';
         const GITHUB_REPO_URL = 'https://github.com/fairusahmad/AIM';
         const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/fairusahmad/AIM/main';
         const REFRESH_INTERVAL = 30000;
@@ -400,10 +400,21 @@
             tableBody.innerHTML = `<tr><td class="empty-state">${escapeHtml(message)}</td></tr>`;
         };
 
-        async function fetchData(page, attempt = 1) {
+        function buildQueryString(page, extraParams = {}) {
+            const params = new URLSearchParams({ page });
+            Object.entries(extraParams).forEach(([key, value]) => {
+                if (value !== undefined && value !== null && value !== '') {
+                    params.set(key, String(value));
+                }
+            });
+            params.set('t', `${Date.now()}_${Math.floor(Math.random() * 100000)}`);
+            return params.toString();
+        }
+
+        async function fetchData(page, attempt = 1, extraParams = {}) {
             const separator = WEB_APP_URL.includes('?') ? '&' : '?';
-            const cacheBuster = `t=${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-            const jsonUrl = `${WEB_APP_URL}${separator}page=${encodeURIComponent(page)}&${cacheBuster}`;
+            const queryString = buildQueryString(page, extraParams);
+            const jsonUrl = `${WEB_APP_URL}${separator}${queryString}`;
 
             if (attempt === 1) {
                 setStatusBanner(getFriendlyLoadingMessage(page), 'info');
@@ -445,7 +456,7 @@
                     if (attempt < 2) {
                         console.warn(`Retrying ${page} after ${reason}`);
                         window.setTimeout(() => {
-                            fetchData(page, attempt + 1).then(resolve);
+                            fetchData(page, attempt + 1, extraParams).then(resolve);
                         }, 1000);
                         return;
                     }
@@ -476,7 +487,8 @@
                     failWithRetry('script load error');
                 };
 
-                script.src = `${WEB_APP_URL}${separator}page=${encodeURIComponent(page)}&callback=${encodeURIComponent(callbackName)}&${cacheBuster}`;
+                const jsonpQuery = buildQueryString(page, { ...extraParams, callback: callbackName });
+                script.src = `${WEB_APP_URL}${separator}${jsonpQuery}`;
                 document.head.appendChild(script);
             });
         }
@@ -565,25 +577,10 @@
 
         function getSensorMonitorFilteredData() {
             const machineFilter = document.getElementById('sensor-machine-filter').value;
-            const timeRangeFilter = document.getElementById('sensor-time-range-filter').value;
-            const timestamps = sensorMonitorData
-                .map(item => new Date(item.Timestamp).getTime())
-                .filter(Number.isFinite);
-            const latestTimestamp = timestamps.length ? Math.max.apply(null, timestamps) : null;
-            const rangeMinutesMap = {
-                '15m': 15,
-                '1h': 60,
-                '4h': 240,
-                '24h': 1440
-            };
-            const rangeMinutes = rangeMinutesMap[timeRangeFilter];
-            const rangeStart = latestTimestamp && rangeMinutes ? latestTimestamp - (rangeMinutes * 60 * 1000) : null;
 
             return sensorMonitorData.filter(item => {
                 const matchesMachine = machineFilter === 'ALL' || item.Machine === machineFilter;
-                const itemTimestamp = new Date(item.Timestamp).getTime();
-                const matchesTime = !rangeStart || !Number.isFinite(itemTimestamp) || itemTimestamp >= rangeStart;
-                return matchesMachine && matchesTime;
+                return matchesMachine;
             });
         }
 
@@ -859,8 +856,9 @@
 
         async function loadPage(page) {
             if (page === 'sensors') {
+                const selectedTimeRange = document.getElementById('sensor-time-range-filter').value;
                 const [sensorData, anomalyData] = await Promise.all([
-                    fetchData('sensors'),
+                    fetchData('sensors', 1, { range: selectedTimeRange }),
                     fetchData('anomalies')
                 ]);
                 if (!sensorData) return;
@@ -920,8 +918,12 @@
             loadPage(activePage);
         }
 
-        function handleSensorFilterChange() {
+        function handleSensorFilterChange(e) {
             if (activePage !== 'sensors') return;
+            if (e && e.target && e.target.id === 'sensor-time-range-filter') {
+                loadPage('sensors');
+                return;
+            }
             if (!sensorMonitorData.length) return;
             renderSensorChart(sensorMonitorData);
         }

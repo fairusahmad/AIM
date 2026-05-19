@@ -4,7 +4,7 @@ function doGet(e) {
   const page = e && e.parameter ? e.parameter.page : '';
   const callback = e && e.parameter ? e.parameter.callback : '';
   if (page) {
-    return handleDataRequest(page, callback);
+    return handleDataRequest(page, callback, e.parameter || {});
   }
 
   return HtmlService.createHtmlOutputFromFile('dashboard_')
@@ -12,8 +12,9 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
 }
 
-function handleDataRequest(page, callback) {
+function handleDataRequest(page, callback, params) {
   let data;
+  params = params || {};
 
   try {
     switch (page) {
@@ -31,7 +32,7 @@ function handleDataRequest(page, callback) {
         data = getSheetDataAsJson_('MachineSummary');
         break;
       case 'sensors':
-        data = getSheetDataAsJson_('SensorData', 300);
+        data = getSensorDataForRange_(params.range);
         break;
       case 'sensorconfig':
         data = getSheetDataAsJson_('SensorConfig', 500, ['SensorID', 'Machine', 'SensorName', 'SensorType', 'Unit', 'WarnThreshold', 'CriticalThreshold', 'Direction', 'Active']);
@@ -112,6 +113,46 @@ function getSheetDataAsJson_(sheetName, maxRows, specificHeaders) {
   }
 
   return result;
+}
+
+function getSensorDataForRange_(rangeKey) {
+  const rangeMinutesMap = {
+    '15m': 15,
+    '1h': 60,
+    '4h': 240,
+    '24h': 1440
+  };
+
+  const selectedRange = rangeKey || '1h';
+  const sensorData = getSheetDataAsJson_('SensorData');
+  if (!Array.isArray(sensorData) || selectedRange === 'all') {
+    return sensorData;
+  }
+
+  const rangeMinutes = rangeMinutesMap[selectedRange];
+  if (!rangeMinutes) {
+    return sensorData;
+  }
+
+  const timestamps = sensorData
+    .map(function(row) {
+      return new Date(row.Timestamp).getTime();
+    })
+    .filter(function(value) {
+      return !isNaN(value);
+    });
+
+  if (timestamps.length === 0) {
+    return sensorData;
+  }
+
+  const latestTimestamp = Math.max.apply(null, timestamps);
+  const rangeStart = latestTimestamp - (rangeMinutes * 60 * 1000);
+
+  return sensorData.filter(function(row) {
+    const itemTimestamp = new Date(row.Timestamp).getTime();
+    return isNaN(itemTimestamp) || itemTimestamp >= rangeStart;
+  });
 }
 
 function getDashboardMeta_() {

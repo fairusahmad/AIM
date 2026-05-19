@@ -20,6 +20,6 @@ Your site will be available at a URL like:
 
 The static dashboard reads data from your Apps Script web app:
 
-`https://script.google.com/macros/s/AKfycbxs85QOtKUOL3LSL6QYwYN9Hqkopttya-7QvtMwt1no3mCoiXyVqolvJzQ0rBodFyWs/exec`
+`https://script.google.com/macros/s/AKfycbwlVLPJG_P8zySzJlSZq3HZ1KmH-JoeKXgX67F5g6Zknlj6FgTQ7WVh-5LAd3m7Mkh8/exec`
 
 If you redeploy Apps Script and get a new `/exec` URL later, update `WEB_APP_URL` in `index.html`, commit, and push again.
