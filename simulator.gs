@@ -239,7 +239,7 @@ function seedHistoricalData() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     SpreadsheetApp.flush();
     const now = new Date();
-    const startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startTime = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
     
     let currentTime = startTime;
     while(currentTime <= now) {
