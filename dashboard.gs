@@ -124,29 +124,35 @@ function getSensorDataForRange_(rangeKey) {
   };
 
   const selectedRange = rangeKey || '1h';
-  const sensorData = getSheetDataAsJson_('SensorData');
-  if (!Array.isArray(sensorData) || selectedRange === 'all') {
-    return sensorData;
+  const allSensorData = getSheetDataAsJson_('SensorData');
+  if (!Array.isArray(allSensorData)) {
+    return { data: allSensorData, latestTimestamp: null };
   }
 
-  const rangeMinutes = rangeMinutesMap[selectedRange];
-  if (!rangeMinutes) {
-    return sensorData;
-  }
-
-  const timestamps = sensorData
+  const timestamps = allSensorData
     .map(function(row) {
       return new Date(row.Timestamp).getTime();
     })
     .filter(function(value) {
       return !isNaN(value);
     });
-
+  
   if (timestamps.length === 0) {
-    return sensorData;
+    return { data: allSensorData, latestTimestamp: null };
   }
 
   const latestTimestamp = Math.max.apply(null, timestamps);
+  const latestTimestampISO = new Date(latestTimestamp).toISOString();
+
+  if (selectedRange === 'all') {
+    return { data: allSensorData, latestTimestamp: latestTimestampISO };
+  }
+
+  const rangeMinutes = rangeMinutesMap[selectedRange];
+  if (!rangeMinutes) {
+    return { data: allSensorData, latestTimestamp: latestTimestampISO };
+  }
+
   const rangeStart = latestTimestamp - (rangeMinutes * 60 * 1000);
 
   return sensorData.filter(function(row) {
