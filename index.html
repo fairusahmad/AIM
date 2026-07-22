@@ -360,6 +360,7 @@
         let activePage = 'overview';
         let refreshIntervalId;
         let dashboardMeta = null;
+        let dashboardHeartbeat = null;
         let sensorMonitorData = [];
         let sensorConfigMap = {};
         let sensorAnomalyData = [];
@@ -501,14 +502,18 @@
             banner.classList.toggle('show', Boolean(message));
         };
 
-        function updateVersionStatus(meta = null) {
+        function updateVersionStatus(meta = null, heartbeat = null) {
             const versionElement = document.getElementById('dashboard-version');
             const updatedElement = document.getElementById('dashboard-version-updated');
             if (versionElement) {
                 versionElement.textContent = DASHBOARD_VERSION;
             }
             if (updatedElement) {
-                const updatedAt = meta && meta.generatedAt ? formatDate(meta.generatedAt) : 'Not available';
+                const updatedAt = meta && meta.generatedAt
+                    ? formatDate(meta.generatedAt)
+                    : heartbeat && heartbeat.generatedAt
+                        ? `${formatDate(heartbeat.generatedAt)} (backend heartbeat)`
+                        : `${formatDate(new Date().toISOString())} (browser load)`;
                 updatedElement.textContent = `Updated: ${updatedAt}`;
             }
         }
@@ -632,7 +637,7 @@
 
             setStatusBanner('Applying dashboard metadata and update status...', 'info');
             dashboardMeta = data;
-            updateVersionStatus(data);
+            updateVersionStatus(data, dashboardHeartbeat);
             document.title = `${data.spreadsheetName || 'AIM Monitoring'} Dashboard`;
             document.getElementById('dashboard-subtitle').textContent = data.spreadsheetName || 'GitHub Pages Dashboard';
             document.getElementById('backend-url').textContent = WEB_APP_URL;
@@ -642,6 +647,13 @@
             }
 
             setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
+        }
+
+        async function loadDashboardHeartbeat() {
+            const data = await fetchData('ping');
+            if (!data) return;
+            dashboardHeartbeat = data;
+            updateVersionStatus(dashboardMeta, data);
         }
 
         function renderOverview(data) {
@@ -1154,6 +1166,7 @@
             Chart.register(sensorChartLabelPlugin);
             setupMlLinks();
 
+            loadDashboardHeartbeat();
             loadSensorConfig().then(() => loadDashboardMeta()).then(() => loadPage(activePage));
 
             if (refreshIntervalId) clearInterval(refreshIntervalId);
