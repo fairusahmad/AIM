@@ -318,6 +318,7 @@
                 <div class="card">
                     <div class="card-body">
                         <div class="small text-muted mb-2" id="debug-json-meta">Waiting to load JSON...</div>
+                        <div class="small text-muted mb-3" id="debug-json-url">Request URL: not loaded yet</div>
                         <pre id="debug-json-output" class="json-debug-output">{}</pre>
                     </div>
                 </div>
@@ -1138,10 +1139,14 @@
         function renderDebugJson(payload, endpoint, extraParams = {}) {
             const output = document.getElementById('debug-json-output');
             const meta = document.getElementById('debug-json-meta');
-            if (!output || !meta) return;
+            const urlElement = document.getElementById('debug-json-url');
+            if (!output || !meta || !urlElement) return;
 
             const paramsText = Object.keys(extraParams).length ? ` | Params: ${JSON.stringify(extraParams)}` : '';
+            const separator = WEB_APP_URL.includes('?') ? '&' : '?';
+            const requestUrl = `${WEB_APP_URL}${separator}${buildQueryString(endpoint, extraParams)}`;
             meta.textContent = `Endpoint: ${endpoint}${paramsText} | Loaded: ${formatDate(new Date().toISOString())}`;
+            urlElement.textContent = `Request URL: ${requestUrl}`;
             output.textContent = JSON.stringify(payload, null, 2);
         }
 
