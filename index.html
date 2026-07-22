@@ -536,11 +536,17 @@
             return pageSteps[step] || getFriendlyLoadingMessage(page);
         };
         const getCacheKey = (page, extraParams = {}) => `${page}:${JSON.stringify(extraParams)}`;
+        const hasUsableData = (data) => {
+            if (Array.isArray(data)) return data.length > 0;
+            return data !== null && data !== undefined;
+        };
         const shouldUseCachedPage = (cachedEntry, forceRefresh = false) => {
             if (forceRefresh || !cachedEntry) return false;
+            if (!hasUsableData(cachedEntry.data)) return false;
             return (Date.now() - cachedEntry.timestamp) < PAGE_CACHE_TTL;
         };
         const setCachedPage = (page, extraParams, data) => {
+            if (!hasUsableData(data)) return;
             pageCache[getCacheKey(page, extraParams)] = {
                 data,
                 timestamp: Date.now()
