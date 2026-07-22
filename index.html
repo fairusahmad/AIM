@@ -49,6 +49,35 @@
             height: 100vh;
             overflow-y: auto;
         }
+        .page-topbar {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 1rem;
+        }
+        .version-status {
+            min-width: 220px;
+            max-width: 320px;
+            background: #ffffff;
+            border: 1px solid #d9e2ec;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(13, 27, 42, 0.08);
+            padding: 0.75rem 1rem;
+            text-align: right;
+        }
+        .version-status-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6c757d;
+        }
+        .version-status-value {
+            font-weight: 700;
+            color: #0d1b2a;
+        }
+        .version-status-meta {
+            font-size: 0.82rem;
+            color: #6c757d;
+        }
         .tab-pane { display: none; }
         .tab-pane.active { display: block; }
         .status-card { border-left-width: 5px; }
@@ -78,6 +107,22 @@
         .resource-card .btn-group-stack {
             margin-top: auto;
         }
+        .connection-card {
+            height: 100%;
+        }
+        .connection-card .card-body {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .connection-kv {
+            font-size: 0.92rem;
+            color: #495057;
+            word-break: break-word;
+        }
+        .connection-kv strong {
+            color: #0d1b2a;
+        }
     </style>
 </head>
 <body>
@@ -93,11 +138,12 @@
             <li class="nav-item"><a class="nav-link" href="#downtime" data-page="downtime"><i class="bi bi-clock-history"></i> Downtime Log</a></li>
             <li class="nav-item"><a class="nav-link" href="#alarms" data-page="alarms"><i class="bi bi-bell-fill"></i> Alarm Log</a></li>
             <li class="nav-item"><a class="nav-link" href="#cycletime" data-page="cycletime"><i class="bi bi-speedometer2"></i> Cycle Time Trend</a></li>
+            <li class="nav-item"><a class="nav-link" href="#connection" data-page="connection"><i class="bi bi-plug-fill"></i> Connection Monitor</a></li>
             <li class="nav-item"><a class="nav-link" href="#ml" data-page="ml"><i class="bi bi-cpu-fill"></i> ML Lab</a></li>
         </ul>
         <hr>
         <div class="bottom-links">
-             <a href="#" id="spreadsheet-link" class="btn btn-outline-secondary btn-sm w-100 mb-2 disabled" target="_blank" rel="noopener noreferrer" aria-disabled="true"><i class="bi bi-table"></i> View Google Sheet</a>
+             <a href="https://docs.google.com/spreadsheets/d/1RkvO_w75qAGwLZsjNnXKCvPsXWPLVpRuBLxGJheNRxw/edit" id="spreadsheet-link" class="btn btn-outline-secondary btn-sm w-100 mb-2" target="_blank" rel="noopener noreferrer"><i class="bi bi-table"></i> View Google Sheet</a>
              <div class="backend-note mt-2">
                 API backend:<br>
                 <span id="backend-url"></span>
@@ -106,6 +152,13 @@
     </div>
 
     <main class="main-content">
+        <div class="page-topbar">
+            <div class="version-status">
+                <div class="version-status-label">Update Status</div>
+                <div class="version-status-value" id="dashboard-version">v2026.07.22</div>
+                <div class="version-status-meta" id="dashboard-version-updated">Updated: checking...</div>
+            </div>
+        </div>
         <div id="status-banner" class="alert alert-warning status-banner" role="alert"></div>
         <div class="tab-content">
             <div class="tab-pane active" id="overview">
@@ -201,6 +254,14 @@
                 </div>
             </div>
 
+            <div class="tab-pane" id="connection">
+                <h3>Connection Monitor</h3>
+                <p class="text-muted">
+                    This page shows how the dashboard communicates with the Apps Script backend and the connected Google Sheet.
+                </p>
+                <div id="connection-status" class="row g-4"></div>
+            </div>
+
             <div class="tab-pane" id="ml">
                 <h3>Machine Learning Lab</h3>
                 <div class="card mb-4">
@@ -291,8 +352,10 @@
 
     <script>
         const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwlVLPJG_P8zySzJlSZq3HZ1KmH-JoeKXgX67F5g6Zknlj6FgTQ7WVh-5LAd3m7Mkh8/exec';
+        const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1RkvO_w75qAGwLZsjNnXKCvPsXWPLVpRuBLxGJheNRxw/edit';
         const GITHUB_REPO_URL = 'https://github.com/fairusahmad/AIM';
         const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/fairusahmad/AIM/main';
+        const DASHBOARD_VERSION = 'v2026.07.22';
         const REFRESH_INTERVAL = 30000;
         let activePage = 'overview';
         let refreshIntervalId;
@@ -342,6 +405,51 @@
             downtime: 'Please wait while downtime data is loading.',
             cycletime: 'Please wait while cycle time data is loading.',
             overview: 'Please wait while the latest machine overview is loading.'
+        };
+        const PAGE_LOADING_STEPS = {
+            meta: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving dashboard metadata and spreadsheet links...'
+            },
+            sensorconfig: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving sensor configuration and threshold settings...'
+            },
+            overview: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving MachineSummary records from Google Sheets...',
+                render: 'Building overview cards and summary table...'
+            },
+            sensors: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving recent SensorData history for the selected range...',
+                render: 'Building sensor charts, thresholds, and anomaly markers...'
+            },
+            anomalies: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving AnomalyLog records from Google Sheets...',
+                render: 'Building anomaly table...'
+            },
+            downtime: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving DowntimeLog records from Google Sheets...',
+                render: 'Building downtime table and analysis charts...'
+            },
+            alarms: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving AlarmLog records from Google Sheets...',
+                render: 'Building alarm table and distribution charts...'
+            },
+            cycletime: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving RawData cycle time records from Google Sheets...',
+                render: 'Building cycle time trend chart...'
+            },
+            connection: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving communication status from Apps Script and Google Sheets...',
+                render: 'Building connection status cards...'
+            }
         };
         const DASHBOARD_LIVE_MESSAGE = 'Dashboard is live.';
 
@@ -393,7 +501,32 @@
             banner.classList.toggle('show', Boolean(message));
         };
 
+        function updateVersionStatus(meta = null) {
+            const versionElement = document.getElementById('dashboard-version');
+            const updatedElement = document.getElementById('dashboard-version-updated');
+            if (versionElement) {
+                versionElement.textContent = DASHBOARD_VERSION;
+            }
+            if (updatedElement) {
+                const updatedAt = meta && meta.generatedAt ? formatDate(meta.generatedAt) : 'Not available';
+                updatedElement.textContent = `Updated: ${updatedAt}`;
+            }
+        }
+
+        function initializeSpreadsheetLink(spreadsheetUrl = SPREADSHEET_URL) {
+            const spreadsheetLink = document.getElementById('spreadsheet-link');
+            if (!spreadsheetLink) return;
+
+            spreadsheetLink.href = spreadsheetUrl;
+            spreadsheetLink.classList.remove('disabled');
+            spreadsheetLink.removeAttribute('aria-disabled');
+        }
+
         const getFriendlyLoadingMessage = (page) => FRIENDLY_LOADING_MESSAGES[page] || FRIENDLY_LOADING_MESSAGES.default;
+        const getPageLoadingStep = (page, step) => {
+            const pageSteps = PAGE_LOADING_STEPS[page] || PAGE_LOADING_STEPS.default || {};
+            return pageSteps[step] || getFriendlyLoadingMessage(page);
+        };
 
         const renderEmptyState = (tableHead, tableBody, message) => {
             tableHead.innerHTML = '';
@@ -417,7 +550,7 @@
             const jsonUrl = `${WEB_APP_URL}${separator}${queryString}`;
 
             if (attempt === 1) {
-                setStatusBanner(getFriendlyLoadingMessage(page), 'info');
+                setStatusBanner(getPageLoadingStep(page, 'connect'), 'info');
             }
 
             try {
@@ -432,12 +565,12 @@
                     throw new Error(`HTTP ${response.status}`);
                 }
 
+                setStatusBanner(getPageLoadingStep(page, 'retrieve'), 'info');
                 const data = await response.json();
                 if (data && data.error) {
                     throw new Error(data.error);
                 }
 
-                if (page !== 'meta') setStatusBanner('');
                 return data;
             } catch (fetchError) {
                 console.warn(`Fetch failed for ${page}, falling back to JSONP.`, fetchError);
@@ -478,7 +611,7 @@
                         resolve(null);
                         return;
                     }
-                    if (page !== 'meta') setStatusBanner('');
+                    setStatusBanner(getPageLoadingStep(page, 'retrieve'), 'info');
                     resolve(data);
                 };
 
@@ -497,16 +630,15 @@
             const data = await fetchData('meta');
             if (!data) return;
 
+            setStatusBanner('Applying dashboard metadata and update status...', 'info');
             dashboardMeta = data;
+            updateVersionStatus(data);
             document.title = `${data.spreadsheetName || 'AIM Monitoring'} Dashboard`;
             document.getElementById('dashboard-subtitle').textContent = data.spreadsheetName || 'GitHub Pages Dashboard';
             document.getElementById('backend-url').textContent = WEB_APP_URL;
 
-            const spreadsheetLink = document.getElementById('spreadsheet-link');
             if (data.spreadsheetUrl) {
-                spreadsheetLink.href = data.spreadsheetUrl;
-                spreadsheetLink.classList.remove('disabled');
-                spreadsheetLink.removeAttribute('aria-disabled');
+                initializeSpreadsheetLink(data.spreadsheetUrl);
             }
 
             setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
@@ -854,16 +986,80 @@
             });
         }
 
+        function renderConnectionMonitor(meta, ping) {
+            const container = document.getElementById('connection-status');
+            if (!container) return;
+
+            const backendOnline = Boolean(ping && ping.status === 'ok');
+            const sheetConnected = Boolean(meta && meta.spreadsheetUrl);
+            const backendBadge = backendOnline ? 'success' : 'danger';
+            const sheetBadge = sheetConnected ? 'success' : 'warning';
+            const backendMessage = ping && ping.message ? ping.message : 'No response from Apps Script backend.';
+            const generatedAt = meta && meta.generatedAt ? formatDate(meta.generatedAt) : 'N/A';
+            const pingAt = ping && ping.generatedAt ? formatDate(ping.generatedAt) : 'N/A';
+
+            container.innerHTML = `
+                <div class="col-lg-4">
+                    <div class="card connection-card border-${backendBadge}">
+                        <div class="card-body">
+                            <h5 class="card-title">Dashboard to Apps Script</h5>
+                            <div><span class="badge bg-${backendBadge}">${backendOnline ? 'Connected' : 'Offline'}</span></div>
+                            <div class="connection-kv"><strong>Status:</strong> ${escapeHtml(backendMessage)}</div>
+                            <div class="connection-kv"><strong>Last Ping:</strong> ${escapeHtml(pingAt)}</div>
+                            <div class="connection-kv"><strong>Backend URL:</strong> ${escapeHtml(WEB_APP_URL)}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card connection-card border-${sheetBadge}">
+                        <div class="card-body">
+                            <h5 class="card-title">Apps Script to Google Sheet</h5>
+                            <div><span class="badge bg-${sheetBadge}">${sheetConnected ? 'Connected' : 'Missing Link'}</span></div>
+                            <div class="connection-kv"><strong>Spreadsheet:</strong> ${escapeHtml((meta && meta.spreadsheetName) || 'N/A')}</div>
+                            <div class="connection-kv"><strong>Sheet URL:</strong> ${sheetConnected ? `<a href="${escapeHtml(meta.spreadsheetUrl)}" target="_blank" rel="noopener noreferrer">Open spreadsheet</a>` : 'N/A'}</div>
+                            <div class="connection-kv"><strong>Metadata Updated:</strong> ${escapeHtml(generatedAt)}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card connection-card border-primary">
+                        <div class="card-body">
+                            <h5 class="card-title">Communication Flow</h5>
+                            <div class="connection-kv"><strong>1.</strong> Browser sends request to Apps Script web app.</div>
+                            <div class="connection-kv"><strong>2.</strong> Apps Script reads Google Sheet data.</div>
+                            <div class="connection-kv"><strong>3.</strong> Apps Script returns JSON to dashboard.</div>
+                            <div class="connection-kv"><strong>4.</strong> Dashboard renders cards, tables, and charts.</div>
+                            <div class="connection-kv"><strong>Browser Time:</strong> ${escapeHtml(formatDate(new Date().toISOString()))}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         async function loadPage(page) {
             if (page === 'sensors') {
                 const selectedTimeRange = document.getElementById('sensor-time-range-filter').value;
+                setStatusBanner('Connecting to Apps Script dashboard service...', 'info');
                 const [sensorData, anomalyData] = await Promise.all([
                     fetchData('sensors', 1, { range: selectedTimeRange }),
                     fetchData('anomalies')
                 ]);
                 if (!sensorData) return;
+                setStatusBanner(getPageLoadingStep('sensors', 'render'), 'info');
                 sensorAnomalyData = Array.isArray(anomalyData) ? anomalyData : [];
                 renderSensorChart(sensorData);
+                setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
+                return;
+            }
+
+            if (page === 'connection') {
+                const [metaData, pingData] = await Promise.all([
+                    fetchData('meta'),
+                    fetchData('ping')
+                ]);
+                if (!metaData && !pingData) return;
+                setStatusBanner(getPageLoadingStep('connection', 'render'), 'info');
+                renderConnectionMonitor(metaData || dashboardMeta || {}, pingData || {});
                 setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
                 return;
             }
@@ -871,6 +1067,7 @@
             const data = await fetchData(page);
             if (!data) return;
 
+            setStatusBanner(getPageLoadingStep(page, 'render'), 'info');
             if (page === 'overview') renderOverview(data);
             else if (page === 'anomalies') renderGenericTable('anomalies', data);
             else if (page === 'downtime') {
@@ -947,6 +1144,8 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('backend-url').textContent = WEB_APP_URL;
+            updateVersionStatus();
+            initializeSpreadsheetLink();
             const tabs = document.getElementById('dashboard-tabs');
             tabs.addEventListener('click', handleTabClick);
             document.getElementById('sensor-machine-filter').addEventListener('change', handleSensorFilterChange);
