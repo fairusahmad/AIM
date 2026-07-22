@@ -124,40 +124,126 @@ function getSensorDataForRange_(rangeKey) {
   };
 
   const selectedRange = rangeKey || '1h';
-  const allSensorData = getSheetDataAsJson_('SensorData');
-  if (!Array.isArray(allSensorData)) {
-    return { data: allSensorData, latestTimestamp: null };
+  const ss = getAIMSpreadsheet_();
+  const sheet = ss.getSheetByName('SensorData');
+  if (!sheet) {
+    return [{ error: 'Sheet "SensorData" not found.' }];
   }
 
-  const timestamps = allSensorData
-    .map(function(row) {
-      return new Date(row.Timestamp).getTime();
-    })
-    .filter(function(value) {
-      return !isNaN(value);
-    });
-  
-  if (timestamps.length === 0) {
-    return { data: allSensorData, latestTimestamp: null };
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn < 1) {
+    return [];
   }
 
-  const latestTimestamp = Math.max.apply(null, timestamps);
-  const latestTimestampISO = new Date(latestTimestamp).toISOString();
-
-  if (selectedRange === 'all') {
-    return { data: allSensorData, latestTimestamp: latestTimestampISO };
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const timestampIndex = headers.indexOf('Timestamp');
+  if (timestampIndex === -1) {
+    return [{ error: 'Missing "Timestamp" header in sheet "SensorData".' }];
   }
 
   const rangeMinutes = rangeMinutesMap[selectedRange];
-  if (!rangeMinutes) {
-    return { data: allSensorData, latestTimestamp: latestTimestampISO };
+  const fullHistoryRequested = selectedRange === 'all' || !rangeMinutes;
+  const recentRows = fullHistoryRequested
+    ? getRecentSensorSheetRows_(sheet, headers, null, timestampIndex, 5000)
+    : getRecentSensorSheetRows_(sheet, headers, rangeMinutes, timestampIndex);
+
+  return sampleSensorRows_(recentRows, fullHistoryRequested ? 180 : 120);
+}
+
+function getRecentSensorSheetRows_(sheet, headers, rangeMinutes, timestampIndex, maxRowsToRead) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  const dataRowCount = lastRow - 1;
+  if (dataRowCount <= 0) {
+    return [];
   }
 
-  const rangeStart = latestTimestamp - (rangeMinutes * 60 * 1000);
+  const chunkSize = 500;
+  const rows = [];
+  let latestTimestamp = null;
+  let rowsRead = 0;
 
-  return sensorData.filter(function(row) {
-    const itemTimestamp = new Date(row.Timestamp).getTime();
-    return isNaN(itemTimestamp) || itemTimestamp >= rangeStart;
+  for (let endRow = lastRow; endRow >= 2; endRow -= chunkSize) {
+    const startRow = Math.max(2, endRow - chunkSize + 1);
+    const rowCount = endRow - startRow + 1;
+    const values = sheet.getRange(startRow, 1, rowCount, lastColumn).getValues();
+
+    for (let i = values.length - 1; i >= 0; i -= 1) {
+      const row = values[i];
+      const timestampValue = row[timestampIndex];
+      const rowTimestamp = timestampValue instanceof Date
+        ? timestampValue.getTime()
+        : new Date(timestampValue).getTime();
+
+      if (!isNaN(rowTimestamp) && latestTimestamp === null) {
+        latestTimestamp = rowTimestamp;
+      }
+
+      if (
+        latestTimestamp !== null &&
+        rangeMinutes &&
+        !isNaN(rowTimestamp) &&
+        rowTimestamp < (latestTimestamp - (rangeMinutes * 60 * 1000))
+      ) {
+        return rows.reverse();
+      }
+
+      rows.push(mapSheetRowToObject_(headers, row));
+      rowsRead += 1;
+
+      if (maxRowsToRead && rowsRead >= maxRowsToRead) {
+        return rows.reverse();
+      }
+    }
+  }
+
+  return rows.reverse();
+}
+
+function mapSheetRowToObject_(headers, row) {
+  return headers.reduce(function(item, header, index) {
+    const value = row[index];
+    item[header] = value instanceof Date ? value.toISOString() : value;
+    return item;
+  }, {});
+}
+
+function sampleSensorRows_(rows, maxPointsPerSensor) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  const groupedRows = rows.reduce(function(acc, row) {
+    const sensorId = row.SensorID || 'UNKNOWN_SENSOR';
+    if (!acc[sensorId]) {
+      acc[sensorId] = [];
+    }
+    acc[sensorId].push(row);
+    return acc;
+  }, {});
+
+  const sampledRows = [];
+  Object.keys(groupedRows).forEach(function(sensorId) {
+    const sensorRows = groupedRows[sensorId];
+    if (sensorRows.length <= maxPointsPerSensor) {
+      sampledRows.push.apply(sampledRows, sensorRows);
+      return;
+    }
+
+    const step = Math.ceil(sensorRows.length / maxPointsPerSensor);
+    for (let index = 0; index < sensorRows.length; index += step) {
+      sampledRows.push(sensorRows[index]);
+    }
+
+    const lastRow = sensorRows[sensorRows.length - 1];
+    if (sampledRows[sampledRows.length - 1] !== lastRow) {
+      sampledRows.push(lastRow);
+    }
+  });
+
+  return sampledRows.sort(function(left, right) {
+    return new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime();
   });
 }
 
