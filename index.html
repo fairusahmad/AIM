@@ -357,6 +357,7 @@
         const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/fairusahmad/AIM/main';
         const DASHBOARD_VERSION = 'v2026.07.22';
         const REFRESH_INTERVAL = 30000;
+        const PAGE_CACHE_TTL = 30000;
         let activePage = 'overview';
         let refreshIntervalId;
         let dashboardMeta = null;
@@ -364,6 +365,8 @@
         let sensorMonitorData = [];
         let sensorConfigMap = {};
         let sensorAnomalyData = [];
+        const pageCache = {};
+        const LIVE_REFRESH_PAGES = new Set(['overview', 'sensors']);
 
         const chartInstances = {};
         const sensorChartLabelPlugin = {
@@ -532,6 +535,18 @@
             const pageSteps = PAGE_LOADING_STEPS[page] || PAGE_LOADING_STEPS.default || {};
             return pageSteps[step] || getFriendlyLoadingMessage(page);
         };
+        const getCacheKey = (page, extraParams = {}) => `${page}:${JSON.stringify(extraParams)}`;
+        const shouldUseCachedPage = (cachedEntry, forceRefresh = false) => {
+            if (forceRefresh || !cachedEntry) return false;
+            return (Date.now() - cachedEntry.timestamp) < PAGE_CACHE_TTL;
+        };
+        const setCachedPage = (page, extraParams, data) => {
+            pageCache[getCacheKey(page, extraParams)] = {
+                data,
+                timestamp: Date.now()
+            };
+        };
+        const getCachedPage = (page, extraParams) => pageCache[getCacheKey(page, extraParams)] || null;
 
         const renderEmptyState = (tableHead, tableBody, message) => {
             tableHead.innerHTML = '';
@@ -1048,14 +1063,31 @@
             `;
         }
 
-        async function loadPage(page) {
+        async function loadPage(page, options = {}) {
+            const forceRefresh = Boolean(options.forceRefresh);
+
             if (page === 'sensors') {
                 const selectedTimeRange = document.getElementById('sensor-time-range-filter').value;
-                setStatusBanner('Connecting to Apps Script dashboard service...', 'info');
-                const [sensorData, anomalyData] = await Promise.all([
-                    fetchData('sensors', 1, { range: selectedTimeRange }),
-                    fetchData('anomalies')
-                ]);
+                const sensorParams = { range: selectedTimeRange };
+                const cachedSensorData = getCachedPage('sensors', sensorParams);
+                const cachedAnomalyData = getCachedPage('anomalies', {});
+
+                let sensorData;
+                let anomalyData;
+
+                if (shouldUseCachedPage(cachedSensorData, forceRefresh) && shouldUseCachedPage(cachedAnomalyData, forceRefresh)) {
+                    sensorData = cachedSensorData.data;
+                    anomalyData = cachedAnomalyData.data;
+                } else {
+                    setStatusBanner('Connecting to Apps Script dashboard service...', 'info');
+                    [sensorData, anomalyData] = await Promise.all([
+                        fetchData('sensors', 1, sensorParams),
+                        fetchData('anomalies')
+                    ]);
+                    if (sensorData) setCachedPage('sensors', sensorParams, sensorData);
+                    if (anomalyData) setCachedPage('anomalies', {}, anomalyData);
+                }
+
                 if (!sensorData) return;
                 setStatusBanner(getPageLoadingStep('sensors', 'render'), 'info');
                 sensorAnomalyData = Array.isArray(anomalyData) ? anomalyData : [];
@@ -1065,10 +1097,24 @@
             }
 
             if (page === 'connection') {
-                const [metaData, pingData] = await Promise.all([
-                    fetchData('meta'),
-                    fetchData('ping')
-                ]);
+                const cachedMeta = getCachedPage('meta', {});
+                const cachedPing = getCachedPage('ping', {});
+
+                let metaData;
+                let pingData;
+
+                if (shouldUseCachedPage(cachedMeta, forceRefresh) && shouldUseCachedPage(cachedPing, forceRefresh)) {
+                    metaData = cachedMeta.data;
+                    pingData = cachedPing.data;
+                } else {
+                    [metaData, pingData] = await Promise.all([
+                        fetchData('meta'),
+                        fetchData('ping')
+                    ]);
+                    if (metaData) setCachedPage('meta', {}, metaData);
+                    if (pingData) setCachedPage('ping', {}, pingData);
+                }
+
                 if (!metaData && !pingData) return;
                 setStatusBanner(getPageLoadingStep('connection', 'render'), 'info');
                 renderConnectionMonitor(metaData || dashboardMeta || {}, pingData || {});
@@ -1076,7 +1122,16 @@
                 return;
             }
 
-            const data = await fetchData(page);
+            const cachedEntry = getCachedPage(page, {});
+            let data;
+
+            if (shouldUseCachedPage(cachedEntry, forceRefresh)) {
+                data = cachedEntry.data;
+            } else {
+                data = await fetchData(page);
+                if (data) setCachedPage(page, {}, data);
+            }
+
             if (!data) return;
 
             setStatusBanner(getPageLoadingStep(page, 'render'), 'info');
@@ -1170,7 +1225,11 @@
             loadSensorConfig().then(() => loadDashboardMeta()).then(() => loadPage(activePage));
 
             if (refreshIntervalId) clearInterval(refreshIntervalId);
-            refreshIntervalId = setInterval(() => loadPage(activePage), REFRESH_INTERVAL);
+            refreshIntervalId = setInterval(() => {
+                if (LIVE_REFRESH_PAGES.has(activePage)) {
+                    loadPage(activePage, { forceRefresh: true });
+                }
+            }, REFRESH_INTERVAL);
         });
     </script>
 
