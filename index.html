@@ -123,6 +123,18 @@
         .connection-kv strong {
             color: #0d1b2a;
         }
+        .json-debug-output {
+            min-height: 420px;
+            max-height: 70vh;
+            overflow: auto;
+            background: #0d1b2a;
+            color: #e0e1dd;
+            border-radius: 12px;
+            padding: 1rem;
+            font-size: 0.88rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
@@ -139,6 +151,7 @@
             <li class="nav-item"><a class="nav-link" href="#alarms" data-page="alarms"><i class="bi bi-bell-fill"></i> Alarm Log</a></li>
             <li class="nav-item"><a class="nav-link" href="#cycletime" data-page="cycletime"><i class="bi bi-speedometer2"></i> Cycle Time Trend</a></li>
             <li class="nav-item"><a class="nav-link" href="#connection" data-page="connection"><i class="bi bi-plug-fill"></i> Connection Monitor</a></li>
+            <li class="nav-item"><a class="nav-link" href="#debugjson" data-page="debugjson"><i class="bi bi-braces"></i> Debug JSON</a></li>
             <li class="nav-item"><a class="nav-link" href="#ml" data-page="ml"><i class="bi bi-cpu-fill"></i> ML Lab</a></li>
         </ul>
         <hr>
@@ -260,6 +273,54 @@
                     This page shows how the dashboard communicates with the Apps Script backend and the connected Google Sheet.
                 </p>
                 <div id="connection-status" class="row g-4"></div>
+            </div>
+
+            <div class="tab-pane" id="debugjson">
+                <h3>Debug JSON</h3>
+                <p class="text-muted">
+                    Use this page to inspect the raw JSON returned by the live Apps Script endpoints. This does not read a `.json` file from GitHub.
+                </p>
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-4">
+                                <label for="debug-json-endpoint" class="form-label">Endpoint</label>
+                                <select id="debug-json-endpoint" class="form-select">
+                                    <option value="ping">ping</option>
+                                    <option value="meta">meta</option>
+                                    <option value="overview" selected>overview</option>
+                                    <option value="sensors">sensors</option>
+                                    <option value="sensorconfig">sensorconfig</option>
+                                    <option value="anomalies">anomalies</option>
+                                    <option value="downtime">downtime</option>
+                                    <option value="alarms">alarms</option>
+                                    <option value="cycletime">cycletime</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="debug-json-range" class="form-label">Sensor Range</label>
+                                <select id="debug-json-range" class="form-select">
+                                    <option value="15m">Last 15 min</option>
+                                    <option value="1h" selected>Last 1 hour</option>
+                                    <option value="4h">Last 4 hours</option>
+                                    <option value="24h">Last 24 hours</option>
+                                    <option value="all">All available (sampled)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <button id="debug-json-refresh" class="btn btn-primary w-100">
+                                    <i class="bi bi-arrow-repeat"></i> Refresh JSON
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="small text-muted mb-2" id="debug-json-meta">Waiting to load JSON...</div>
+                        <pre id="debug-json-output" class="json-debug-output">{}</pre>
+                    </div>
+                </div>
             </div>
 
             <div class="tab-pane" id="ml">
@@ -453,6 +514,11 @@
                 connect: 'Connecting to Apps Script dashboard service...',
                 retrieve: 'Retrieving communication status from Apps Script and Google Sheets...',
                 render: 'Building connection status cards...'
+            },
+            debugjson: {
+                connect: 'Connecting to Apps Script dashboard service...',
+                retrieve: 'Retrieving raw JSON response from Apps Script...',
+                render: 'Rendering raw JSON response...'
             }
         };
         const DASHBOARD_LIVE_MESSAGE = 'Dashboard is live.';
@@ -1069,6 +1135,16 @@
             `;
         }
 
+        function renderDebugJson(payload, endpoint, extraParams = {}) {
+            const output = document.getElementById('debug-json-output');
+            const meta = document.getElementById('debug-json-meta');
+            if (!output || !meta) return;
+
+            const paramsText = Object.keys(extraParams).length ? ` | Params: ${JSON.stringify(extraParams)}` : '';
+            meta.textContent = `Endpoint: ${endpoint}${paramsText} | Loaded: ${formatDate(new Date().toISOString())}`;
+            output.textContent = JSON.stringify(payload, null, 2);
+        }
+
         async function loadPage(page, options = {}) {
             const forceRefresh = Boolean(options.forceRefresh);
 
@@ -1124,6 +1200,30 @@
                 if (!metaData && !pingData) return;
                 setStatusBanner(getPageLoadingStep('connection', 'render'), 'info');
                 renderConnectionMonitor(metaData || dashboardMeta || {}, pingData || {});
+                setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
+                return;
+            }
+
+            if (page === 'debugjson') {
+                const endpointSelect = document.getElementById('debug-json-endpoint');
+                const rangeSelect = document.getElementById('debug-json-range');
+                const selectedEndpoint = endpointSelect ? endpointSelect.value : 'overview';
+                const extraParams = selectedEndpoint === 'sensors'
+                    ? { range: rangeSelect ? rangeSelect.value : '1h' }
+                    : {};
+                const cachedEntry = getCachedPage(selectedEndpoint, extraParams);
+                let data;
+
+                if (shouldUseCachedPage(cachedEntry, forceRefresh)) {
+                    data = cachedEntry.data;
+                } else {
+                    data = await fetchData(selectedEndpoint, 1, extraParams);
+                    if (data) setCachedPage(selectedEndpoint, extraParams, data);
+                }
+
+                if (!data) return;
+                setStatusBanner(getPageLoadingStep('debugjson', 'render'), 'info');
+                renderDebugJson(data, selectedEndpoint, extraParams);
                 setStatusBanner(DASHBOARD_LIVE_MESSAGE, 'success');
                 return;
             }
@@ -1198,6 +1298,11 @@
             renderSensorChart(sensorMonitorData);
         }
 
+        function handleDebugJsonControls() {
+            if (activePage !== 'debugjson') return;
+            loadPage('debugjson', { forceRefresh: true });
+        }
+
         function setupMlLinks() {
             const links = {
                 'ml-readme-link': `${GITHUB_REPO_URL}/blob/main/notebooks/README.md`,
@@ -1223,6 +1328,9 @@
             tabs.addEventListener('click', handleTabClick);
             document.getElementById('sensor-machine-filter').addEventListener('change', handleSensorFilterChange);
             document.getElementById('sensor-time-range-filter').addEventListener('change', handleSensorFilterChange);
+            document.getElementById('debug-json-endpoint').addEventListener('change', handleDebugJsonControls);
+            document.getElementById('debug-json-range').addEventListener('change', handleDebugJsonControls);
+            document.getElementById('debug-json-refresh').addEventListener('click', handleDebugJsonControls);
 
             Chart.register(sensorChartLabelPlugin);
             setupMlLinks();
